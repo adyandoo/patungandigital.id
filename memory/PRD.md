@@ -30,13 +30,23 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - Seeded services (Netflix, Spotify, YouTube) with default plans.
 - Testing agent: 25/25 backend tests pass, frontend smoke flows verified.
 
+## Iteration 2 (2026-02-18) — Admin dashboard enhancements
+- **Activity Log** (new tab): `admin_logs` collection auto-populated by `log_admin_action()` on create_user, delete_user, create_service, delete_service, delete_subscription, send_reminder, scheduler_run, bulk_delete_users, bulk_send_reminder, export_users_csv, export_payments_csv. UI shows actor, action badge, target, meta.
+- **Auto Scheduler**: `_reminder_scheduler_loop` background asyncio task started in lifespan; runs every 1h; scans payments due in ≤ `days_before_due` days (from reminder_config) that haven't been reminded in last 24h; sends via same core `_send_reminder_for_payment` (MOCKED without keys). Manual trigger endpoint `POST /admin/scheduler/run-now` + UI button.
+- **Bulk Actions + CSV Export**:
+  - `POST /admin/users/bulk-delete` (skips admins) — UI checkboxes + "Hapus N" button.
+  - `POST /admin/payments/bulk-remind` — UI checkboxes + "Kirim reminder N" button.
+  - `GET /admin/users/export.csv` — streamed CSV with attachment header.
+  - `GET /admin/payments/export.csv` — streamed CSV.
+- Refactored `send_reminder` into `_send_reminder_for_payment` core (async run_in_executor for blocking SDK calls).
+- Testing: 36/36 backend tests pass (11 new), all frontend flows verified.
+
 ## Backlog / next tasks
 - **P0**: Add real API keys → enable Xendit + SendGrid + Twilio (currently MOCKED for reminders).
-- **P1**: Background cron/scheduler to auto-send reminders H-N (currently manual button only).
-- **P1**: Emergent Google social login (user selected but not yet implemented — can be added later).
+- **P1**: Emergent Google social login (user selected but not yet implemented).
 - **P1**: Webhook endpoint for Xendit callback → auto-mark payment as `paid`.
+- **P2**: Store `due_date` as native BSON date (currently ISO string; works due to lexical sort but timezone-fragile).
 - **P2**: Move base64 receipts to object storage once volume grows.
-- **P2**: Async SendGrid/Twilio calls (wrap in run_in_executor).
+- **P2**: Toast stacking layout on admin dashboard (multiple simultaneous toasts overlap).
 - **P2**: Tighten CORS to explicit frontend origins.
-- **P2**: Suppress 401 console noise from `/auth/me` probe on public pages.
 - **P2**: Homepage testimonial section, FAQ, referral program for shareability.
