@@ -1,10 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import api, { rupiah, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
+import {
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from "recharts";
 import {
   Users, PlusCircle, Trash, PencilSimple, PaperPlaneTilt, Receipt,
   Storefront, Ticket, GearSix, Eye, X, Image as ImageIcon,
   ClockCounterClockwise, DownloadSimple, CheckSquare, Lightning,
+  MagnifyingGlass,
 } from "@phosphor-icons/react";
 
 const TABS = [
@@ -72,16 +76,70 @@ function Stat({ label, value, color }) {
 }
 
 function Overview() {
+  const [ana, setAna] = useState(null);
+  useEffect(() => { api.get("/admin/analytics").then((r) => setAna(r.data)).catch(() => {}); }, []);
+  const totals = ana?.totals || {};
   return (
-    <div className="brutal p-8">
-      <h2 className="font-display font-bold text-2xl">Selamat datang, Admin.</h2>
-      <p className="mt-2 text-gray-700">Gunakan tab di atas untuk mengelola seluruh platform. Semua CRUD user, service, subscription, dan pengingat pembayaran ada di sini.</p>
-      <div className="grid md:grid-cols-2 gap-4 mt-6">
-        <Note title="Auto Scheduler (ACTIVE)" body="Background scheduler jalan setiap 1 jam, otomatis kirim reminder untuk tagihan yang jatuh tempo dalam H-N (sesuai konfigurasi). Kamu bisa juga trigger manual via tab Reminder → Run scheduler now." />
-        <Note title="Activity Log" body="Semua aksi admin (create/delete/bulk/send reminder/scheduler run/export) tercatat di tab Activity." />
-        <Note title="Payment Gateway (Xendit)" body="Isi XENDIT_API_KEY di backend/.env untuk mengaktifkan invoice otomatis. Tanpa key, admin bisa tetap membuat tagihan manual." />
-        <Note title="Reminder Email + WhatsApp" body="Isi SENDGRID_API_KEY dan TWILIO_ACCOUNT_SID/AUTH_TOKEN untuk mengaktifkan pengiriman notifikasi. Tanpa key, pengiriman berjalan dalam mode MOCKED (dicatat di log)." />
+    <div className="space-y-6">
+      <div className="brutal p-8">
+        <h2 className="font-display font-bold text-2xl">Selamat datang, Admin.</h2>
+        <p className="mt-2 text-gray-700">Gunakan tab di atas untuk mengelola seluruh platform. Semua CRUD user, service, subscription, dan pengingat pembayaran ada di sini.</p>
       </div>
+
+      {/* Analytics */}
+      <div className="grid md:grid-cols-3 gap-6">
+        <BigMetric label="Total pendapatan (paid)" value={rupiah(totals.total_revenue_paid || 0)} color="#34C759" />
+        <BigMetric label="Pembayaran lunas" value={totals.paid_count || 0} color="#007AFF" />
+        <BigMetric label="Rata-rata pembayaran" value={rupiah(Math.round(totals.avg_payment || 0))} color="#FFD60A" />
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-6">
+        <div className="brutal p-6 lg:col-span-2" data-testid="analytics-monthly-chart">
+          <div className="font-display font-bold text-xl mb-4">Pendapatan bulanan (12 bulan)</div>
+          <div style={{ width: "100%", height: 280 }}>
+            <ResponsiveContainer>
+              <LineChart data={ana?.monthly || []} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                <CartesianGrid stroke="#0A0A0A" strokeDasharray="0" strokeOpacity={0.1} />
+                <XAxis dataKey="label" stroke="#0A0A0A" tick={{ fontFamily: "Space Mono", fontSize: 11 }} />
+                <YAxis stroke="#0A0A0A" tick={{ fontFamily: "Space Mono", fontSize: 11 }} tickFormatter={(v) => `${(v/1000)|0}k`} />
+                <Tooltip contentStyle={{ border: "2px solid #0A0A0A", borderRadius: 0, boxShadow: "4px 4px 0 #0A0A0A", background: "#fff", fontFamily: "IBM Plex Sans" }} formatter={(v) => rupiah(v)} />
+                <Line type="stepAfter" dataKey="revenue" stroke="#FF3B30" strokeWidth={3} dot={{ fill: "#0A0A0A", r: 4 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div className="brutal p-6" data-testid="analytics-service-chart">
+          <div className="font-display font-bold text-xl mb-4">Revenue per layanan</div>
+          <div style={{ width: "100%", height: 280 }}>
+            <ResponsiveContainer>
+              <BarChart data={ana?.by_service || []} layout="vertical" margin={{ top: 10, right: 20, left: 10, bottom: 0 }}>
+                <CartesianGrid stroke="#0A0A0A" strokeOpacity={0.1} />
+                <XAxis type="number" stroke="#0A0A0A" tick={{ fontFamily: "Space Mono", fontSize: 11 }} tickFormatter={(v) => `${(v/1000)|0}k`} />
+                <YAxis dataKey="service" type="category" stroke="#0A0A0A" tick={{ fontFamily: "Space Mono", fontSize: 11 }} width={80} />
+                <Tooltip contentStyle={{ border: "2px solid #0A0A0A", borderRadius: 0, boxShadow: "4px 4px 0 #0A0A0A", background: "#fff" }} formatter={(v) => rupiah(v)} />
+                <Bar dataKey="revenue" fill="#007AFF" stroke="#0A0A0A" strokeWidth={2} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <Note title="Auto Scheduler (ACTIVE)" body="Background scheduler jalan setiap 1 jam, otomatis kirim reminder untuk tagihan yang jatuh tempo dalam H-N (sesuai konfigurasi). Trigger manual via tab Reminder → Run scheduler now." />
+        <Note title="Activity Log" body="Semua aksi admin (create/delete/bulk/send reminder/scheduler run/export) tercatat di tab Activity." />
+        <Note title="Payment Gateway (Xendit)" body="Isi XENDIT_API_KEY di backend/.env untuk invoice otomatis. Webhook siap di /api/webhooks/xendit — pasang di Xendit dashboard dengan XENDIT_WEBHOOK_TOKEN." />
+        <Note title="Reminder Email + WhatsApp" body="Isi SENDGRID_API_KEY dan TWILIO_ACCOUNT_SID/AUTH_TOKEN untuk mengaktifkan notifikasi. Tanpa key, pengiriman berjalan dalam mode MOCKED (dicatat di log)." />
+      </div>
+    </div>
+  );
+}
+
+function BigMetric({ label, value, color }) {
+  return (
+    <div className="brutal p-6">
+      <div className="w-3 h-3" style={{ background: color }}></div>
+      <div className="font-mono text-xs uppercase text-gray-600 mt-3">{label}</div>
+      <div className="font-display font-black text-3xl mt-1">{value}</div>
     </div>
   );
 }
@@ -100,9 +158,18 @@ function UsersTab() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [selected, setSelected] = useState([]);
+  const [q, setQ] = useState("");
 
   const load = () => api.get("/admin/users").then((r) => { setUsers(r.data); setSelected([]); });
   useEffect(() => { load(); }, []);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return users;
+    return users.filter((u) =>
+      [u.name, u.email, u.username, u.whatsapp, u.role].some((v) => String(v || "").toLowerCase().includes(needle))
+    );
+  }, [users, q]);
 
   const del = async (id) => {
     if (!window.confirm("Hapus user ini?")) return;
@@ -124,14 +191,17 @@ function UsersTab() {
   };
 
   const toggle = (id) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
-  const selectableIds = users.filter((u) => u.role !== "admin").map((u) => u.id);
+  const selectableIds = filtered.filter((u) => u.role !== "admin").map((u) => u.id);
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.includes(id));
   const toggleAll = () => setSelected(allSelected ? [] : selectableIds);
 
   return (
     <div>
       <div className="flex justify-between items-center mb-6 flex-wrap gap-3">
-        <h2 className="font-display font-bold text-2xl">Users ({users.length})</h2>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h2 className="font-display font-bold text-2xl">Users ({filtered.length}/{users.length})</h2>
+          <SearchInput value={q} onChange={setQ} placeholder="Cari nama, email, WA..." testid="users-search" />
+        </div>
         <div className="flex gap-2 flex-wrap">
           {selected.length > 0 && (
             <button data-testid="users-bulk-delete" onClick={bulkDelete} className="brutal-btn brutal-btn-red text-sm">
@@ -155,7 +225,7 @@ function UsersTab() {
             </tr>
           </thead>
           <tbody data-testid="users-table">
-            {users.map((u) => (
+            {filtered.map((u) => (
               <tr key={u.id} className="border-t-2 border-black" data-testid={`user-row-${u.id}`}>
                 <td className="px-3 py-3">
                   {u.role !== "admin" && (
@@ -175,10 +245,33 @@ function UsersTab() {
                 </td>
               </tr>
             ))}
+            {filtered.length === 0 && (
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-600">Tidak ada hasil.</td></tr>
+            )}
           </tbody>
         </table>
       </div>
       {showModal && <UserModal user={editing} onClose={() => setShowModal(false)} onSaved={() => { setShowModal(false); load(); }} />}
+    </div>
+  );
+}
+
+function SearchInput({ value, onChange, placeholder, testid }) {
+  return (
+    <div className="brutal-sm bg-white flex items-center gap-2 px-3 py-2">
+      <MagnifyingGlass weight="bold" size={16} />
+      <input
+        data-testid={testid}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="border-none outline-none w-56 text-sm bg-transparent"
+      />
+      {value && (
+        <button onClick={() => onChange("")} className="text-gray-500 hover:text-black" title="Clear">
+          <X weight="bold" size={14} />
+        </button>
+      )}
     </div>
   );
 }
@@ -399,12 +492,21 @@ function SubscriptionsTab() {
   const [users, setUsers] = useState([]);
   const [services, setServices] = useState([]);
   const [showModal, setShowModal] = useState(false);
+  const [q, setQ] = useState("");
 
   const load = async () => {
     const [s, u, sv] = await Promise.all([api.get("/admin/subscriptions"), api.get("/admin/users"), api.get("/admin/services")]);
     setSubs(s.data); setUsers(u.data); setServices(sv.data);
   };
   useEffect(() => { load(); }, []);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return subs;
+    return subs.filter((s) =>
+      [s.user?.name, s.user?.email, s.service?.name, s.role, s.status].some((v) => String(v || "").toLowerCase().includes(needle))
+    );
+  }, [subs, q]);
 
   const del = async (id) => {
     if (!window.confirm("Hapus subscription?")) return;
@@ -414,8 +516,11 @@ function SubscriptionsTab() {
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="font-display font-bold text-2xl">Subscriptions ({subs.length})</h2>
+      <div className="flex justify-between items-center mb-6 flex-wrap gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <h2 className="font-display font-bold text-2xl">Subscriptions ({filtered.length}/{subs.length})</h2>
+          <SearchInput value={q} onChange={setQ} placeholder="Cari user, layanan..." testid="subs-search" />
+        </div>
         <button data-testid="admin-add-sub" className="brutal-btn brutal-btn-red" onClick={() => setShowModal(true)}><PlusCircle weight="bold" /> Tempatkan User</button>
       </div>
       <div className="brutal overflow-x-auto">
@@ -424,7 +529,7 @@ function SubscriptionsTab() {
             <tr>{["User", "Service", "Role", "Mulai", "Harga", "Status", "Aksi"].map((h) => <th key={h} className="text-left px-4 py-3 font-mono uppercase text-xs">{h}</th>)}</tr>
           </thead>
           <tbody data-testid="subs-table">
-            {subs.map((s) => (
+            {filtered.map((s) => (
               <tr key={s.id} className="border-t-2 border-black">
                 <td className="px-4 py-3 font-semibold">{s.user?.name || "?"}</td>
                 <td className="px-4 py-3">{s.service?.name}</td>
@@ -437,6 +542,9 @@ function SubscriptionsTab() {
                 </td>
               </tr>
             ))}
+            {filtered.length === 0 && (
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-600">Tidak ada hasil.</td></tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -501,12 +609,25 @@ function PaymentsTab() {
   const [showModal, setShowModal] = useState(false);
   const [viewReceipt, setViewReceipt] = useState(null);
   const [selected, setSelected] = useState([]);
+  const [q, setQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   const load = async () => {
     const [p, s] = await Promise.all([api.get("/admin/payments"), api.get("/admin/subscriptions")]);
     setPayments(p.data); setSubs(s.data); setSelected([]);
   };
   useEffect(() => { load(); }, []);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return payments.filter((p) => {
+      if (statusFilter !== "all" && p.status !== statusFilter) return false;
+      if (!needle) return true;
+      return [p.user?.name, p.user?.email, p.service_name, p.period_label, p.status].some((v) =>
+        String(v || "").toLowerCase().includes(needle)
+      );
+    });
+  }, [payments, q, statusFilter]);
 
   const setStatus = async (id, status) => {
     await api.patch(`/admin/payments/${id}`, { status });
@@ -531,13 +652,23 @@ function PaymentsTab() {
   };
 
   const toggle = (id) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
-  const allSelected = payments.length > 0 && payments.every((p) => selected.includes(p.id));
-  const toggleAll = () => setSelected(allSelected ? [] : payments.map((p) => p.id));
+  const allSelected = filtered.length > 0 && filtered.every((p) => selected.includes(p.id));
+  const toggleAll = () => setSelected(allSelected ? [] : filtered.map((p) => p.id));
 
   return (
     <div>
       <div className="flex justify-between items-center mb-6 flex-wrap gap-3">
-        <h2 className="font-display font-bold text-2xl">Payments ({payments.length})</h2>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h2 className="font-display font-bold text-2xl">Payments ({filtered.length}/{payments.length})</h2>
+          <SearchInput value={q} onChange={setQ} placeholder="Cari user, layanan, periode..." testid="payments-search" />
+          <select data-testid="payments-status-filter" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="brutal-sm bg-white px-3 py-2 text-sm border-2 border-black">
+            <option value="all">Semua status</option>
+            <option value="pending">pending</option>
+            <option value="review">review</option>
+            <option value="paid">paid</option>
+            <option value="overdue">overdue</option>
+          </select>
+        </div>
         <div className="flex gap-2 flex-wrap">
           {selected.length > 0 && (
             <button data-testid="payments-bulk-remind" onClick={bulkRemind} className="brutal-btn brutal-btn-yellow text-sm">
@@ -559,7 +690,7 @@ function PaymentsTab() {
             </tr>
           </thead>
           <tbody data-testid="payments-table">
-            {payments.map((p) => (
+            {filtered.map((p) => (
               <tr key={p.id} className="border-t-2 border-black">
                 <td className="px-3 py-3"><input type="checkbox" data-testid={`payment-check-${p.id}`} checked={selected.includes(p.id)} onChange={() => toggle(p.id)} /></td>
                 <td className="px-4 py-3 font-semibold">{p.user?.name || "?"}</td>
@@ -582,6 +713,9 @@ function PaymentsTab() {
                 </td>
               </tr>
             ))}
+            {filtered.length === 0 && (
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-600">Tidak ada hasil.</td></tr>
+            )}
           </tbody>
         </table>
       </div>

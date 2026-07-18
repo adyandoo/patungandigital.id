@@ -77,23 +77,35 @@ def user_out(u: dict) -> dict:
 
 # ---------------- Auth ---------------- #
 async def get_current_user(request: Request) -> dict:
+    # 1. Try JWT access_token cookie/header
     token = request.cookies.get("access_token")
     if not token:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             token = auth[7:]
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user_out(user)
+    if token:
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+            user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+            if user:
+                return user_out(user)
+        except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, Exception):
+            pass
+    # 2. Try Emergent session_token cookie (Google auth path)
+    session_token = request.cookies.get("session_token")
+    if session_token:
+        sess = await db.user_sessions.find_one({"session_token": session_token})
+        if sess:
+            expires_at = sess.get("expires_at")
+            if isinstance(expires_at, str):
+                expires_at = datetime.fromisoformat(expires_at)
+            if expires_at and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at and expires_at > now_utc():
+                user = await db.users.find_one({"_id": ObjectId(sess["user_id"])})
+                if user:
+                    return user_out(user)
+    raise HTTPException(status_code=401, detail="Not authenticated")
 
 
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
@@ -248,8 +260,8 @@ async def _run_due_reminders(actor: Optional[dict] = None) -> dict:
     cfg = await db.settings.find_one({"key": "reminder_config"}) or {}
     days = int(cfg.get("days_before_due", 3) or 3)
     now = now_utc()
-    threshold = (now + timedelta(days=days)).isoformat()
-    yesterday = (now - timedelta(hours=24)).isoformat()
+    threshold = now + timedelta(days=days)
+    yesterday = now - timedelta(hours=24)
     q = {
         "status": {"$in": ["pending", "review"]},
         "due_date": {"$lte": threshold, "$ne": None},
@@ -275,6 +287,21 @@ async def lifespan(app: FastAPI):
     await db.services.create_index("slug", unique=True)
     await db.subscriptions.create_index("user_id")
     await db.payments.create_index("subscription_id")
+    await db.payments.create_index("due_date")
+    await db.user_sessions.create_index("session_token", unique=True)
+    await db.user_sessions.create_index("expires_at")
+    await db.admin_logs.create_index("created_at")
+    # P2: Migrate string dates → BSON dates for scheduler-critical fields
+    async for p in db.payments.find({"due_date": {"$type": "string"}}):
+        try:
+            await db.payments.update_one({"_id": p["_id"]}, {"$set": {"due_date": datetime.fromisoformat(p["due_date"])}})
+        except Exception:
+            pass
+    async for p in db.payments.find({"last_reminder_at": {"$type": "string"}}):
+        try:
+            await db.payments.update_one({"_id": p["_id"]}, {"$set": {"last_reminder_at": datetime.fromisoformat(p["last_reminder_at"])}})
+        except Exception:
+            pass
     # Seed admin
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@patungandigital.id")
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
@@ -607,13 +634,16 @@ async def my_payments(user: dict = Depends(get_current_user)):
 @api.post("/admin/payments")
 async def admin_create_payment(input: PaymentInput, admin: dict = Depends(require_admin)):
     doc = input.model_dump()
-    doc["due_date"] = doc["due_date"].isoformat() if doc.get("due_date") else None
+    # P2: store due_date as native BSON date
+    doc["due_date"] = input.due_date if input.due_date else None
     doc["status"] = "pending"
     doc["created_at"] = now_utc().isoformat()
     doc["receipt"] = None
     result = await db.payments.insert_one(doc)
     doc["id"] = oid(result.inserted_id)
     doc.pop("_id", None)
+    if doc.get("due_date"):
+        doc["due_date"] = doc["due_date"].isoformat()
     # Try create Xendit invoice if key exists
     xendit_key = os.environ.get("XENDIT_API_KEY", "")
     if xendit_key:
@@ -720,11 +750,14 @@ async def _send_reminder_for_payment(payment_id: str, actor: Optional[dict] = No
     svc = await db.services.find_one({"_id": ObjectId(sub["service_id"])})
     cfg = await db.settings.find_one({"key": "reminder_config"}) or {}
     msg_template = cfg.get("reminder_message") or "Halo {name}, tagihan {service} untuk {period} akan jatuh tempo pada {due_date}. Jumlah: Rp {amount}."
+    due_display = p.get("due_date", "")
+    if isinstance(due_display, datetime):
+        due_display = due_display.strftime("%d %b %Y")
     msg = msg_template.format(
         name=(user or {}).get("name", ""),
         service=(svc or {}).get("name", ""),
         period=p.get("period_label", ""),
-        due_date=p.get("due_date", ""),
+        due_date=due_display,
         amount=f"{int(p.get('amount', 0)):,}".replace(",", "."),
     )
     email_sent = False
@@ -761,7 +794,7 @@ async def _send_reminder_for_payment(payment_id: str, actor: Optional[dict] = No
         mocked = True
         logger.info(f"[MOCK WHATSAPP] to={(user or {}).get('whatsapp')} msg={msg}")
 
-    await db.payments.update_one({"_id": ObjectId(payment_id)}, {"$set": {"last_reminder_at": now_utc().isoformat()}})
+    await db.payments.update_one({"_id": ObjectId(payment_id)}, {"$set": {"last_reminder_at": now_utc()}})
     await log_admin_action(actor, "send_reminder", f"payment:{payment_id}", {"email_sent": email_sent, "whatsapp_sent": wa_sent, "mocked": mocked, "user": (user or {}).get("email")})
     return {"email_sent": email_sent, "whatsapp_sent": wa_sent, "mocked": mocked, "message": msg, "payment_id": payment_id}
 
@@ -872,6 +905,168 @@ async def export_payments_csv(admin: dict = Depends(require_admin)):
 async def scheduler_run_now(admin: dict = Depends(require_admin)):
     result = await _run_due_reminders(actor=admin)
     return {"ok": True, **result}
+
+
+# ---------------- Google Auth (Emergent-managed) ---------------- #
+# REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+class GoogleSessionInput(BaseModel):
+    session_id: str
+
+
+@api.post("/auth/google/exchange")
+async def google_exchange(input: GoogleSessionInput, response: Response):
+    """Exchange Emergent session_id for our JWT + persist session_token."""
+    async with httpx.AsyncClient() as hc:
+        r = await hc.get(
+            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+            headers={"X-Session-ID": input.session_id},
+            timeout=15,
+        )
+    if r.status_code >= 300:
+        raise HTTPException(status_code=401, detail="Google session invalid")
+    data = r.json()
+    email = (data.get("email") or "").lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="No email from provider")
+    existing = await db.users.find_one({"email": email})
+    if existing is None:
+        doc = {
+            "email": email,
+            "name": data.get("name") or email.split("@")[0],
+            "username": email.split("@")[0],
+            "picture": data.get("picture"),
+            "google_id": data.get("id"),
+            "password_hash": hash_password(secrets.token_urlsafe(24)),  # random unusable
+            "role": "user",
+            "extra": {},
+            "auth_provider": "google",
+            "created_at": now_utc().isoformat(),
+        }
+        result = await db.users.insert_one(doc)
+        doc["_id"] = result.inserted_id
+        user = doc
+    else:
+        # keep name/picture fresh
+        updates = {"picture": data.get("picture") or existing.get("picture")}
+        if data.get("id") and not existing.get("google_id"):
+            updates["google_id"] = data["id"]
+        await db.users.update_one({"_id": existing["_id"]}, {"$set": updates})
+        user = {**existing, **updates}
+    # Persist Emergent session_token (7 days)
+    session_token = data.get("session_token")
+    expires_at = now_utc() + timedelta(days=7)
+    if session_token:
+        await db.user_sessions.insert_one({
+            "user_id": str(user["_id"]),
+            "session_token": session_token,
+            "expires_at": expires_at,
+            "created_at": now_utc(),
+        })
+        response.set_cookie("session_token", session_token, httponly=True, secure=True, samesite="none", max_age=604800, path="/")
+    # Also issue our JWT so existing auth path works
+    jwt_token = create_token(str(user["_id"]))
+    response.set_cookie("access_token", jwt_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
+    return {"user": user_out(user), "token": jwt_token}
+
+
+# ---------------- Xendit webhook ---------------- #
+@api.post("/webhooks/xendit")
+async def xendit_webhook(request: Request):
+    """Xendit calls this on invoice status change. External_id format: pay-{payment_id}."""
+    expected_token = os.environ.get("XENDIT_WEBHOOK_TOKEN", "")
+    received = request.headers.get("X-CALLBACK-TOKEN", "")
+    if expected_token and received != expected_token:
+        raise HTTPException(status_code=401, detail="Invalid callback token")
+    body = await request.json()
+    external_id = body.get("external_id", "")
+    status_val = (body.get("status") or "").upper()
+    if not external_id.startswith("pay-"):
+        return {"ok": True, "note": "ignored (unknown external_id)"}
+    payment_id = external_id[4:]
+    try:
+        obj_id = ObjectId(payment_id)
+    except Exception:
+        return {"ok": True, "note": "invalid payment id"}
+    new_status = None
+    if status_val in ("PAID", "SETTLED"):
+        new_status = "paid"
+    elif status_val in ("EXPIRED", "FAILED"):
+        new_status = "overdue"
+    if new_status:
+        await db.payments.update_one({"_id": obj_id}, {"$set": {"status": new_status, "xendit_paid_at": now_utc()}})
+        await log_admin_action(None, "xendit_webhook", f"payment:{payment_id}", {"status": new_status, "raw_status": status_val})
+    return {"ok": True, "status": new_status}
+
+
+# ---------------- Analytics ---------------- #
+@api.get("/admin/analytics")
+async def admin_analytics(admin: dict = Depends(require_admin)):
+    """Aggregate monthly revenue (paid payments) for last 12 months + revenue by service."""
+    now = now_utc()
+    start = (now.replace(day=1, hour=0, minute=0, second=0, microsecond=0) - timedelta(days=365)).replace(day=1)
+    pipeline_monthly = [
+        {"$match": {"status": "paid"}},
+        {"$addFields": {
+            "created_dt": {"$cond": [{"$eq": [{"$type": "$created_at"}, "string"]},
+                                     {"$dateFromString": {"dateString": "$created_at", "onError": None, "onNull": None}},
+                                     "$created_at"]}
+        }},
+        {"$match": {"created_dt": {"$gte": start}}},
+        {"$group": {
+            "_id": {"y": {"$year": "$created_dt"}, "m": {"$month": "$created_dt"}},
+            "revenue": {"$sum": "$amount"},
+            "count": {"$sum": 1},
+        }},
+        {"$sort": {"_id.y": 1, "_id.m": 1}},
+    ]
+    monthly_rows = await db.payments.aggregate(pipeline_monthly).to_list(None)
+    # Build 12-month timeline with zeroes
+    months = []
+    cursor = start
+    while cursor <= now:
+        months.append({"year": cursor.year, "month": cursor.month, "revenue": 0, "count": 0})
+        # next month
+        if cursor.month == 12:
+            cursor = cursor.replace(year=cursor.year + 1, month=1)
+        else:
+            cursor = cursor.replace(month=cursor.month + 1)
+    for row in monthly_rows:
+        y, m = row["_id"]["y"], row["_id"]["m"]
+        for slot in months:
+            if slot["year"] == y and slot["month"] == m:
+                slot["revenue"] = row["revenue"]
+                slot["count"] = row["count"]
+                break
+    labels_id = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
+    monthly = [{"label": f"{labels_id[m['month']-1]} {str(m['year'])[2:]}", "revenue": m["revenue"], "count": m["count"]} for m in months]
+
+    # Revenue by service (all paid)
+    paid = await db.payments.find({"status": "paid"}).to_list(None)
+    by_service_map = {}
+    for p in paid:
+        sub = await db.subscriptions.find_one({"_id": ObjectId(p["subscription_id"])})
+        if not sub:
+            continue
+        svc = await db.services.find_one({"_id": ObjectId(sub["service_id"])})
+        if not svc:
+            continue
+        key = svc["name"]
+        entry = by_service_map.setdefault(key, {"service": key, "revenue": 0, "count": 0, "color": svc.get("color", "#0A0A0A")})
+        entry["revenue"] += p.get("amount", 0)
+        entry["count"] += 1
+    by_service = sorted(by_service_map.values(), key=lambda x: -x["revenue"])
+
+    # Status distribution
+    status_pipeline = [{"$group": {"_id": "$status", "count": {"$sum": 1}, "total": {"$sum": "$amount"}}}]
+    status_rows = await db.payments.aggregate(status_pipeline).to_list(None)
+    status_dist = [{"status": r["_id"], "count": r["count"], "total": r["total"]} for r in status_rows]
+
+    totals = {
+        "total_revenue_paid": sum(p.get("amount", 0) for p in paid),
+        "paid_count": len(paid),
+        "avg_payment": (sum(p.get("amount", 0) for p in paid) / len(paid)) if paid else 0,
+    }
+    return {"monthly": monthly, "by_service": by_service, "status_distribution": status_dist, "totals": totals}
 
 
 app.include_router(api)
