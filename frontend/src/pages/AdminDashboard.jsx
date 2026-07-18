@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import {
   Users, PlusCircle, Trash, PencilSimple, PaperPlaneTilt, Receipt,
   Storefront, Ticket, GearSix, Eye, X, Image as ImageIcon,
+  ClockCounterClockwise, DownloadSimple, CheckSquare, Lightning,
 } from "@phosphor-icons/react";
 
 const TABS = [
@@ -13,6 +14,7 @@ const TABS = [
   { id: "subscriptions", label: "Subscriptions", icon: <Ticket weight="duotone" /> },
   { id: "payments", label: "Payments", icon: <Receipt weight="duotone" /> },
   { id: "reminder", label: "Reminder", icon: <PaperPlaneTilt weight="duotone" /> },
+  { id: "activity", label: "Activity", icon: <ClockCounterClockwise weight="duotone" /> },
 ];
 
 export default function AdminDashboard() {
@@ -53,6 +55,7 @@ export default function AdminDashboard() {
         {tab === "subscriptions" && <SubscriptionsTab />}
         {tab === "payments" && <PaymentsTab />}
         {tab === "reminder" && <ReminderTab />}
+        {tab === "activity" && <ActivityTab />}
       </div>
     </div>
   );
@@ -74,6 +77,8 @@ function Overview() {
       <h2 className="font-display font-bold text-2xl">Selamat datang, Admin.</h2>
       <p className="mt-2 text-gray-700">Gunakan tab di atas untuk mengelola seluruh platform. Semua CRUD user, service, subscription, dan pengingat pembayaran ada di sini.</p>
       <div className="grid md:grid-cols-2 gap-4 mt-6">
+        <Note title="Auto Scheduler (ACTIVE)" body="Background scheduler jalan setiap 1 jam, otomatis kirim reminder untuk tagihan yang jatuh tempo dalam H-N (sesuai konfigurasi). Kamu bisa juga trigger manual via tab Reminder → Run scheduler now." />
+        <Note title="Activity Log" body="Semua aksi admin (create/delete/bulk/send reminder/scheduler run/export) tercatat di tab Activity." />
         <Note title="Payment Gateway (Xendit)" body="Isi XENDIT_API_KEY di backend/.env untuk mengaktifkan invoice otomatis. Tanpa key, admin bisa tetap membuat tagihan manual." />
         <Note title="Reminder Email + WhatsApp" body="Isi SENDGRID_API_KEY dan TWILIO_ACCOUNT_SID/AUTH_TOKEN untuk mengaktifkan pengiriman notifikasi. Tanpa key, pengiriman berjalan dalam mode MOCKED (dicatat di log)." />
       </div>
@@ -94,8 +99,9 @@ function UsersTab() {
   const [users, setUsers] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [selected, setSelected] = useState([]);
 
-  const load = () => api.get("/admin/users").then((r) => setUsers(r.data));
+  const load = () => api.get("/admin/users").then((r) => { setUsers(r.data); setSelected([]); });
   useEffect(() => { load(); }, []);
 
   const del = async (id) => {
@@ -105,24 +111,57 @@ function UsersTab() {
     load();
   };
 
+  const bulkDelete = async () => {
+    if (selected.length === 0) return toast.error("Pilih dulu user-nya");
+    if (!window.confirm(`Hapus ${selected.length} user? (Admin akan dilewati)`)) return;
+    const { data } = await api.post("/admin/users/bulk-delete", { ids: selected });
+    toast.success(`${data.deleted} user dihapus${data.skipped_admins ? ` (${data.skipped_admins} admin dilewati)` : ""}`);
+    load();
+  };
+
+  const exportCSV = () => {
+    window.open(`${process.env.REACT_APP_BACKEND_URL}/api/admin/users/export.csv?_=${Date.now()}`, "_blank");
+  };
+
+  const toggle = (id) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
+  const selectableIds = users.filter((u) => u.role !== "admin").map((u) => u.id);
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.includes(id));
+  const toggleAll = () => setSelected(allSelected ? [] : selectableIds);
+
   return (
     <div>
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-6 flex-wrap gap-3">
         <h2 className="font-display font-bold text-2xl">Users ({users.length})</h2>
-        <button data-testid="admin-add-user" className="brutal-btn brutal-btn-red" onClick={() => { setEditing(null); setShowModal(true); }}>
-          <PlusCircle weight="bold" /> Tambah User
-        </button>
+        <div className="flex gap-2 flex-wrap">
+          {selected.length > 0 && (
+            <button data-testid="users-bulk-delete" onClick={bulkDelete} className="brutal-btn brutal-btn-red text-sm">
+              <Trash weight="bold" /> Hapus {selected.length}
+            </button>
+          )}
+          <button data-testid="users-export-csv" onClick={exportCSV} className="brutal-btn brutal-btn-white text-sm">
+            <DownloadSimple weight="bold" /> Export CSV
+          </button>
+          <button data-testid="admin-add-user" className="brutal-btn brutal-btn-red text-sm" onClick={() => { setEditing(null); setShowModal(true); }}>
+            <PlusCircle weight="bold" /> Tambah User
+          </button>
+        </div>
       </div>
       <div className="brutal overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-black text-white">
             <tr>
+              <th className="px-3 py-3"><input type="checkbox" checked={allSelected} onChange={toggleAll} data-testid="users-select-all" /></th>
               {["Nama", "Email", "Username", "WhatsApp", "Role", "Aksi"].map((h) => <th key={h} className="text-left px-4 py-3 font-mono uppercase text-xs">{h}</th>)}
             </tr>
           </thead>
           <tbody data-testid="users-table">
             {users.map((u) => (
               <tr key={u.id} className="border-t-2 border-black" data-testid={`user-row-${u.id}`}>
+                <td className="px-3 py-3">
+                  {u.role !== "admin" && (
+                    <input type="checkbox" data-testid={`user-check-${u.id}`} checked={selected.includes(u.id)} onChange={() => toggle(u.id)} />
+                  )}
+                </td>
                 <td className="px-4 py-3 font-semibold">{u.name}</td>
                 <td className="px-4 py-3">{u.email}</td>
                 <td className="px-4 py-3">{u.username || "-"}</td>
@@ -461,10 +500,11 @@ function PaymentsTab() {
   const [subs, setSubs] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [viewReceipt, setViewReceipt] = useState(null);
+  const [selected, setSelected] = useState([]);
 
   const load = async () => {
     const [p, s] = await Promise.all([api.get("/admin/payments"), api.get("/admin/subscriptions")]);
-    setPayments(p.data); setSubs(s.data);
+    setPayments(p.data); setSubs(s.data); setSelected([]);
   };
   useEffect(() => { load(); }, []);
 
@@ -478,18 +518,50 @@ function PaymentsTab() {
     toast.success(`Reminder ${data.mocked ? "(MOCKED)" : ""} dikirim. Email: ${data.email_sent}, WA: ${data.whatsapp_sent}`);
   };
 
+  const bulkRemind = async () => {
+    if (selected.length === 0) return toast.error("Pilih dulu tagihannya");
+    const { data } = await api.post("/admin/payments/bulk-remind", { ids: selected });
+    const mocked = data.results.some((r) => r.mocked);
+    toast.success(`${data.count} reminder terkirim ${mocked ? "(sebagian MOCKED)" : ""}`);
+    load();
+  };
+
+  const exportCSV = () => {
+    window.open(`${process.env.REACT_APP_BACKEND_URL}/api/admin/payments/export.csv?_=${Date.now()}`, "_blank");
+  };
+
+  const toggle = (id) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
+  const allSelected = payments.length > 0 && payments.every((p) => selected.includes(p.id));
+  const toggleAll = () => setSelected(allSelected ? [] : payments.map((p) => p.id));
+
   return (
     <div>
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-6 flex-wrap gap-3">
         <h2 className="font-display font-bold text-2xl">Payments ({payments.length})</h2>
-        <button data-testid="admin-add-payment" className="brutal-btn brutal-btn-red" onClick={() => setShowModal(true)}><PlusCircle weight="bold" /> Buat Tagihan</button>
+        <div className="flex gap-2 flex-wrap">
+          {selected.length > 0 && (
+            <button data-testid="payments-bulk-remind" onClick={bulkRemind} className="brutal-btn brutal-btn-yellow text-sm">
+              <PaperPlaneTilt weight="bold" /> Kirim reminder {selected.length}
+            </button>
+          )}
+          <button data-testid="payments-export-csv" onClick={exportCSV} className="brutal-btn brutal-btn-white text-sm">
+            <DownloadSimple weight="bold" /> Export CSV
+          </button>
+          <button data-testid="admin-add-payment" className="brutal-btn brutal-btn-red text-sm" onClick={() => setShowModal(true)}><PlusCircle weight="bold" /> Buat Tagihan</button>
+        </div>
       </div>
       <div className="brutal overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-black text-white"><tr>{["User", "Service", "Periode", "Jumlah", "Jatuh Tempo", "Status", "Bukti", "Aksi"].map((h) => <th key={h} className="text-left px-4 py-3 font-mono uppercase text-xs">{h}</th>)}</tr></thead>
+          <thead className="bg-black text-white">
+            <tr>
+              <th className="px-3 py-3"><input type="checkbox" checked={allSelected} onChange={toggleAll} data-testid="payments-select-all" /></th>
+              {["User", "Service", "Periode", "Jumlah", "Jatuh Tempo", "Status", "Bukti", "Aksi"].map((h) => <th key={h} className="text-left px-4 py-3 font-mono uppercase text-xs">{h}</th>)}
+            </tr>
+          </thead>
           <tbody data-testid="payments-table">
             {payments.map((p) => (
               <tr key={p.id} className="border-t-2 border-black">
+                <td className="px-3 py-3"><input type="checkbox" data-testid={`payment-check-${p.id}`} checked={selected.includes(p.id)} onChange={() => toggle(p.id)} /></td>
                 <td className="px-4 py-3 font-semibold">{p.user?.name || "?"}</td>
                 <td className="px-4 py-3">{p.service_name}</td>
                 <td className="px-4 py-3">{p.period_label || "-"}</td>
@@ -562,6 +634,7 @@ function PaymentModal({ subs, onClose, onSaved }) {
 /* ---------- Reminder Config ---------- */
 function ReminderTab() {
   const [cfg, setCfg] = useState(null);
+  const [running, setRunning] = useState(false);
   useEffect(() => { api.get("/admin/reminder-config").then((r) => setCfg(r.data)); }, []);
   if (!cfg) return <div>Memuat...</div>;
   const save = async (e) => {
@@ -576,20 +649,110 @@ function ReminderTab() {
       toast.success("Konfigurasi tersimpan");
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
   };
+  const runNow = async () => {
+    setRunning(true);
+    try {
+      const { data } = await api.post("/admin/scheduler/run-now");
+      toast.success(`Scheduler dijalankan: ${data.count} reminder terkirim`);
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally { setRunning(false); }
+  };
   return (
-    <form onSubmit={save} className="brutal p-8 max-w-2xl" data-testid="reminder-form">
-      <h2 className="font-display font-bold text-2xl">Payment Reminder</h2>
-      <p className="text-sm text-gray-700 mt-1">Notifikasi otomatis akan dikirim H-N sebelum jatuh tempo. Kirim manual dari tab Payments.</p>
-      <div className="mt-6 space-y-4">
-        <F label="Kirim reminder H- (hari)"><input type="number" className="brutal-input" value={cfg.days_before_due} onChange={(e) => setCfg({ ...cfg, days_before_due: e.target.value })} /></F>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={cfg.enable_email} onChange={(e) => setCfg({ ...cfg, enable_email: e.target.checked })} /> Aktifkan Email (SendGrid)</label>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={cfg.enable_whatsapp} onChange={(e) => setCfg({ ...cfg, enable_whatsapp: e.target.checked })} /> Aktifkan WhatsApp (Twilio)</label>
-        <F label="Template pesan (gunakan {name}, {service}, {period}, {due_date}, {amount})">
-          <textarea rows="5" className="brutal-input" value={cfg.reminder_message} onChange={(e) => setCfg({ ...cfg, reminder_message: e.target.value })} />
-        </F>
+    <div className="grid md:grid-cols-3 gap-6">
+      <form onSubmit={save} className="brutal p-8 md:col-span-2" data-testid="reminder-form">
+        <h2 className="font-display font-bold text-2xl">Payment Reminder</h2>
+        <p className="text-sm text-gray-700 mt-1">Scheduler otomatis jalan setiap 1 jam & kirim reminder untuk tagihan H-N sebelum jatuh tempo (yang belum diingatkan dalam 24 jam terakhir).</p>
+        <div className="mt-6 space-y-4">
+          <F label="Kirim reminder H- (hari)"><input type="number" className="brutal-input" value={cfg.days_before_due} onChange={(e) => setCfg({ ...cfg, days_before_due: e.target.value })} /></F>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={cfg.enable_email} onChange={(e) => setCfg({ ...cfg, enable_email: e.target.checked })} /> Aktifkan Email (SendGrid)</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={cfg.enable_whatsapp} onChange={(e) => setCfg({ ...cfg, enable_whatsapp: e.target.checked })} /> Aktifkan WhatsApp (Twilio)</label>
+          <F label="Template pesan (gunakan {name}, {service}, {period}, {due_date}, {amount})">
+            <textarea rows="5" className="brutal-input" value={cfg.reminder_message} onChange={(e) => setCfg({ ...cfg, reminder_message: e.target.value })} />
+          </F>
+        </div>
+        <button type="submit" className="brutal-btn brutal-btn-red mt-6" data-testid="reminder-save">Simpan konfigurasi</button>
+      </form>
+      <div className="brutal p-6 bg-[#FFD60A]/30 h-fit">
+        <div className="font-display font-bold text-xl flex items-center gap-2"><Lightning weight="fill" /> Jalankan sekarang</div>
+        <p className="text-sm mt-2">Trigger scheduler manual — akan scan semua tagihan yang jatuh tempo dalam <b>{cfg.days_before_due}</b> hari.</p>
+        <button onClick={runNow} disabled={running} className="brutal-btn brutal-btn-blue mt-4 w-full justify-center" data-testid="scheduler-run-now">
+          {running ? "Menjalankan..." : "Run scheduler now"}
+        </button>
       </div>
-      <button type="submit" className="brutal-btn brutal-btn-red mt-6" data-testid="reminder-save">Simpan</button>
-    </form>
+    </div>
+  );
+}
+
+/* ---------- Activity Log ---------- */
+function ActivityTab() {
+  const [logs, setLogs] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const load = async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get("/admin/logs?limit=200");
+      setLogs(data.logs); setTotal(data.total);
+    } finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const actionColor = (a) => {
+    if (a.startsWith("delete")) return "bg-[#FF3B30] text-white";
+    if (a.startsWith("create")) return "bg-[#34C759] text-white";
+    if (a.startsWith("bulk")) return "bg-[#FFD60A]";
+    if (a.startsWith("export")) return "bg-white";
+    if (a.startsWith("scheduler")) return "bg-[#007AFF] text-white";
+    if (a === "send_reminder") return "bg-[#FFD60A]";
+    return "bg-gray-100";
+  };
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6 flex-wrap gap-3">
+        <div>
+          <h2 className="font-display font-bold text-2xl">Activity Log</h2>
+          <p className="text-sm text-gray-700">Total {total} aksi tercatat. Menampilkan 200 terbaru.</p>
+        </div>
+        <button onClick={load} className="brutal-btn brutal-btn-white text-sm" data-testid="activity-refresh">Refresh</button>
+      </div>
+      {loading ? (
+        <div className="brutal p-8 text-center text-gray-600">Memuat...</div>
+      ) : logs.length === 0 ? (
+        <div className="brutal p-8 text-center text-gray-600">Belum ada aktivitas.</div>
+      ) : (
+        <div className="brutal overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-black text-white">
+              <tr>{["Waktu", "Aktor", "Aksi", "Target", "Detail"].map((h) => <th key={h} className="text-left px-4 py-3 font-mono uppercase text-xs">{h}</th>)}</tr>
+            </thead>
+            <tbody data-testid="activity-table">
+              {logs.map((l) => (
+                <tr key={l.id} className="border-t-2 border-black">
+                  <td className="px-4 py-3 font-mono text-xs whitespace-nowrap">{new Date(l.created_at).toLocaleString("id-ID")}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-semibold">{l.actor_name || "system"}</div>
+                    <div className="text-xs text-gray-600">{l.actor_email}</div>
+                  </td>
+                  <td className="px-4 py-3"><span className={`px-2 py-1 border-2 border-black font-mono text-xs uppercase inline-block ${actionColor(l.action)}`}>{l.action}</span></td>
+                  <td className="px-4 py-3 font-mono text-xs">{l.target || "-"}</td>
+                  <td className="px-4 py-3 text-xs text-gray-700">
+                    {l.meta && Object.keys(l.meta).length > 0 ? (
+                      <div className="max-w-md">
+                        {Object.entries(l.meta).slice(0, 4).map(([k, v]) => (
+                          <div key={k}><span className="font-mono text-gray-500">{k}:</span> {String(v)}</div>
+                        ))}
+                      </div>
+                    ) : "-"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 

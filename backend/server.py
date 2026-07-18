@@ -1,5 +1,8 @@
 """patungandigital.id — subscription sharing platform backend."""
 import os
+import io
+import csv
+import asyncio
 import logging
 import base64
 import secrets
@@ -13,6 +16,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -96,6 +100,23 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
     return user
+
+
+# ---------------- Activity log ---------------- #
+async def log_admin_action(admin: Optional[dict], action: str, target: str = "", meta: Optional[dict] = None):
+    """Persist an admin action to admin_logs. `admin` can be None for system/scheduler."""
+    try:
+        await db.admin_logs.insert_one({
+            "actor_id": admin.get("id") if admin else None,
+            "actor_name": (admin.get("name") if admin else "system") or "system",
+            "actor_email": admin.get("email") if admin else "system@patungandigital.id",
+            "action": action,
+            "target": target,
+            "meta": meta or {},
+            "created_at": now_utc().isoformat(),
+        })
+    except Exception as e:
+        logger.warning(f"log_admin_action failed: {e}")
 
 
 # ---------------- Models ---------------- #
@@ -199,6 +220,53 @@ class ReminderConfigInput(BaseModel):
 
 
 # ---------------- App ---------------- #
+_scheduler_stop = asyncio.Event()
+
+
+async def _reminder_scheduler_loop():
+    """Background loop: every hour, scan pending payments due within `days_before_due`
+    that have not received a reminder in the last 24h, and send them."""
+    logger.info("Reminder scheduler started (interval=1h)")
+    # Small initial delay so app fully starts
+    try:
+        await asyncio.wait_for(_scheduler_stop.wait(), timeout=30)
+        return
+    except asyncio.TimeoutError:
+        pass
+    while not _scheduler_stop.is_set():
+        try:
+            await _run_due_reminders(actor=None)
+        except Exception as e:
+            logger.warning(f"scheduler tick failed: {e}")
+        try:
+            await asyncio.wait_for(_scheduler_stop.wait(), timeout=3600)
+        except asyncio.TimeoutError:
+            continue
+
+
+async def _run_due_reminders(actor: Optional[dict] = None) -> dict:
+    cfg = await db.settings.find_one({"key": "reminder_config"}) or {}
+    days = int(cfg.get("days_before_due", 3) or 3)
+    now = now_utc()
+    threshold = (now + timedelta(days=days)).isoformat()
+    yesterday = (now - timedelta(hours=24)).isoformat()
+    q = {
+        "status": {"$in": ["pending", "review"]},
+        "due_date": {"$lte": threshold, "$ne": None},
+        "$or": [{"last_reminder_at": None}, {"last_reminder_at": {"$lte": yesterday}}, {"last_reminder_at": {"$exists": False}}],
+    }
+    to_send = await db.payments.find(q).to_list(None)
+    sent = []
+    for p in to_send:
+        try:
+            r = await _send_reminder_for_payment(str(p["_id"]), actor=actor)
+            sent.append({"payment_id": str(p["_id"]), **{k: r.get(k) for k in ("email_sent", "whatsapp_sent", "mocked")}})
+        except Exception as e:
+            logger.warning(f"scheduler send failed for {p['_id']}: {e}")
+    await log_admin_action(actor, "scheduler_run", "reminders", {"count": len(sent), "days_before_due": days})
+    return {"count": len(sent), "sent": sent}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Indexes
@@ -251,7 +319,11 @@ async def lifespan(app: FastAPI):
                 await db.plans.insert_one({"service_id": str(svc["_id"]), "name": "Spotify Family (1 host + 5)", "host_slots": 1, "regular_slots": 5, "notes": "", "created_at": now_utc().isoformat()})
             elif svc["slug"] == "youtube":
                 await db.plans.insert_one({"service_id": str(svc["_id"]), "name": "YouTube Premium (1 host + 5)", "host_slots": 1, "regular_slots": 5, "notes": "", "created_at": now_utc().isoformat()})
+    # Start background reminder scheduler
+    scheduler_task = asyncio.create_task(_reminder_scheduler_loop())
     yield
+    _scheduler_stop.set()
+    scheduler_task.cancel()
     client.close()
 
 
@@ -365,6 +437,7 @@ async def admin_create_user(input: AdminUserInput, admin: dict = Depends(require
     doc["created_at"] = now_utc().isoformat()
     result = await db.users.insert_one(doc)
     doc["_id"] = result.inserted_id
+    await log_admin_action(admin, "create_user", f"user:{result.inserted_id}", {"email": doc["email"], "role": doc.get("role")})
     return user_out(doc)
 
 
@@ -383,8 +456,10 @@ async def admin_update_user(user_id: str, input: AdminUserUpdate, admin: dict = 
 
 @api.delete("/admin/users/{user_id}")
 async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
+    victim = await db.users.find_one({"_id": ObjectId(user_id)})
     await db.users.delete_one({"_id": ObjectId(user_id)})
     await db.subscriptions.delete_many({"user_id": user_id})
+    await log_admin_action(admin, "delete_user", f"user:{user_id}", {"email": (victim or {}).get("email")})
     return {"ok": True}
 
 
@@ -419,8 +494,10 @@ async def admin_update_service(service_id: str, input: ServiceInput, admin: dict
 
 @api.delete("/admin/services/{service_id}")
 async def admin_delete_service(service_id: str, admin: dict = Depends(require_admin)):
+    svc = await db.services.find_one({"_id": ObjectId(service_id)})
     await db.services.delete_one({"_id": ObjectId(service_id)})
     await db.plans.delete_many({"service_id": service_id})
+    await log_admin_action(admin, "delete_service", f"service:{service_id}", {"name": (svc or {}).get("name")})
     return {"ok": True}
 
 
@@ -491,6 +568,7 @@ async def admin_update_sub(sub_id: str, input: SubscriptionInput, admin: dict = 
 @api.delete("/admin/subscriptions/{sub_id}")
 async def admin_delete_sub(sub_id: str, admin: dict = Depends(require_admin)):
     await db.subscriptions.delete_one({"_id": ObjectId(sub_id)})
+    await log_admin_action(admin, "delete_subscription", f"subscription:{sub_id}")
     return {"ok": True}
 
 
@@ -623,18 +701,28 @@ async def set_reminder_config(input: ReminderConfigInput, admin: dict = Depends(
 
 @api.post("/admin/send-reminder/{payment_id}")
 async def send_reminder(payment_id: str, admin: dict = Depends(require_admin)):
-    """Send reminder for a payment. Uses SendGrid + Twilio if configured, otherwise MOCKED."""
+    """Manual reminder trigger for a single payment."""
+    result = await _send_reminder_for_payment(payment_id, actor=admin)
+    if result.get("error"):
+        raise HTTPException(status_code=404 if result["error"] == "not_found" else 500, detail=result["error"])
+    return result
+
+
+async def _send_reminder_for_payment(payment_id: str, actor: Optional[dict] = None) -> dict:
+    """Core reminder logic (usable by manual endpoint + scheduler)."""
     p = await db.payments.find_one({"_id": ObjectId(payment_id)})
     if not p:
-        raise HTTPException(404, "Not found")
+        return {"error": "not_found"}
     sub = await db.subscriptions.find_one({"_id": ObjectId(p["subscription_id"])})
+    if not sub:
+        return {"error": "sub_missing"}
     user = await db.users.find_one({"_id": ObjectId(sub["user_id"])})
     svc = await db.services.find_one({"_id": ObjectId(sub["service_id"])})
     cfg = await db.settings.find_one({"key": "reminder_config"}) or {}
     msg_template = cfg.get("reminder_message") or "Halo {name}, tagihan {service} untuk {period} akan jatuh tempo pada {due_date}. Jumlah: Rp {amount}."
     msg = msg_template.format(
-        name=user.get("name", ""),
-        service=svc.get("name", ""),
+        name=(user or {}).get("name", ""),
+        service=(svc or {}).get("name", ""),
         period=p.get("period_label", ""),
         due_date=p.get("due_date", ""),
         amount=f"{int(p.get('amount', 0)):,}".replace(",", "."),
@@ -642,7 +730,6 @@ async def send_reminder(payment_id: str, admin: dict = Depends(require_admin)):
     email_sent = False
     wa_sent = False
     mocked = False
-    # Email via SendGrid
     if cfg.get("enable_email", True) and os.environ.get("SENDGRID_API_KEY"):
         try:
             from sendgrid import SendGridAPIClient
@@ -653,33 +740,30 @@ async def send_reminder(payment_id: str, admin: dict = Depends(require_admin)):
                 subject=f"Pengingat Pembayaran {svc['name']} - patungandigital.id",
                 plain_text_content=msg,
             )
-            sg = SendGridAPIClient(os.environ["SENDGRID_API_KEY"])
-            sg.send(m)
+            await asyncio.get_event_loop().run_in_executor(None, lambda: SendGridAPIClient(os.environ["SENDGRID_API_KEY"]).send(m))
             email_sent = True
         except Exception as e:
             logger.warning(f"SendGrid error: {e}")
     else:
         mocked = True
-        logger.info(f"[MOCK EMAIL] to={user['email']} msg={msg}")
-    # WhatsApp via Twilio
-    if cfg.get("enable_whatsapp", True) and os.environ.get("TWILIO_ACCOUNT_SID") and user.get("whatsapp"):
+        logger.info(f"[MOCK EMAIL] to={(user or {}).get('email')} msg={msg}")
+    if cfg.get("enable_whatsapp", True) and os.environ.get("TWILIO_ACCOUNT_SID") and (user or {}).get("whatsapp"):
         try:
             from twilio.rest import Client as TwilioClient
-            tc = TwilioClient(os.environ["TWILIO_ACCOUNT_SID"], os.environ["TWILIO_AUTH_TOKEN"])
-            tc.messages.create(
-                from_=os.environ.get("TWILIO_WHATSAPP_FROM"),
-                to=f"whatsapp:{user['whatsapp']}",
-                body=msg,
-            )
+            def _send_wa():
+                tc = TwilioClient(os.environ["TWILIO_ACCOUNT_SID"], os.environ["TWILIO_AUTH_TOKEN"])
+                tc.messages.create(from_=os.environ.get("TWILIO_WHATSAPP_FROM"), to=f"whatsapp:{user['whatsapp']}", body=msg)
+            await asyncio.get_event_loop().run_in_executor(None, _send_wa)
             wa_sent = True
         except Exception as e:
             logger.warning(f"Twilio error: {e}")
     else:
         mocked = True
-        logger.info(f"[MOCK WHATSAPP] to={user.get('whatsapp')} msg={msg}")
+        logger.info(f"[MOCK WHATSAPP] to={(user or {}).get('whatsapp')} msg={msg}")
 
     await db.payments.update_one({"_id": ObjectId(payment_id)}, {"$set": {"last_reminder_at": now_utc().isoformat()}})
-    return {"email_sent": email_sent, "whatsapp_sent": wa_sent, "mocked": mocked, "message": msg}
+    await log_admin_action(actor, "send_reminder", f"payment:{payment_id}", {"email_sent": email_sent, "whatsapp_sent": wa_sent, "mocked": mocked, "user": (user or {}).get("email")})
+    return {"email_sent": email_sent, "whatsapp_sent": wa_sent, "mocked": mocked, "message": msg, "payment_id": payment_id}
 
 
 # ---------------- Admin: stats ---------------- #
@@ -691,6 +775,103 @@ async def admin_stats(admin: dict = Depends(require_admin)):
         "active_subscriptions": await db.subscriptions.count_documents({"status": "active"}),
         "pending_payments": await db.payments.count_documents({"status": "pending"}),
     }
+
+
+# ---------------- Admin: Activity log ---------------- #
+@api.get("/admin/logs")
+async def admin_list_logs(admin: dict = Depends(require_admin), limit: int = 100, skip: int = 0):
+    total = await db.admin_logs.count_documents({})
+    logs = await db.admin_logs.find({}).sort("created_at", -1).skip(skip).limit(min(limit, 500)).to_list(None)
+    for l in logs:
+        l["id"] = oid(l.pop("_id"))
+    return {"total": total, "logs": logs}
+
+
+# ---------------- Admin: Bulk actions ---------------- #
+class BulkIdsInput(BaseModel):
+    ids: List[str]
+
+
+@api.post("/admin/users/bulk-delete")
+async def bulk_delete_users(input: BulkIdsInput, admin: dict = Depends(require_admin)):
+    # never allow deleting admins via bulk
+    obj_ids = [ObjectId(i) for i in input.ids]
+    targets = await db.users.find({"_id": {"$in": obj_ids}, "role": {"$ne": "admin"}}).to_list(None)
+    ids_to_delete = [t["_id"] for t in targets]
+    deleted = 0
+    if ids_to_delete:
+        r = await db.users.delete_many({"_id": {"$in": ids_to_delete}})
+        deleted = r.deleted_count
+        await db.subscriptions.delete_many({"user_id": {"$in": [str(x) for x in ids_to_delete]}})
+    await log_admin_action(admin, "bulk_delete_users", "users", {"count": deleted, "requested": len(input.ids)})
+    return {"deleted": deleted, "skipped_admins": len(input.ids) - deleted}
+
+
+@api.post("/admin/payments/bulk-remind")
+async def bulk_remind_payments(input: BulkIdsInput, admin: dict = Depends(require_admin)):
+    results = []
+    for pid in input.ids:
+        r = await _send_reminder_for_payment(pid, actor=admin)
+        results.append({"payment_id": pid, **r})
+    await log_admin_action(admin, "bulk_send_reminder", "payments", {"count": len(results)})
+    return {"count": len(results), "results": results}
+
+
+# ---------------- Admin: CSV export ---------------- #
+def _csv_stream(headers: List[str], rows: List[List[str]]) -> StreamingResponse:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(headers)
+    for r in rows:
+        w.writerow(r)
+    buf.seek(0)
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv")
+
+
+@api.get("/admin/users/export.csv")
+async def export_users_csv(admin: dict = Depends(require_admin)):
+    users = await db.users.find({}).to_list(None)
+    rows = [[
+        str(u.get("_id")), u.get("name", ""), u.get("username", ""), u.get("email", ""),
+        u.get("whatsapp", "") or "", u.get("gender", "") or "", u.get("role", ""), u.get("created_at", "") or "",
+    ] for u in users]
+    resp = _csv_stream(["id", "name", "username", "email", "whatsapp", "gender", "role", "created_at"], rows)
+    resp.headers["Content-Disposition"] = 'attachment; filename="users.csv"'
+    await log_admin_action(admin, "export_users_csv", "users", {"count": len(rows)})
+    return resp
+
+
+@api.get("/admin/payments/export.csv")
+async def export_payments_csv(admin: dict = Depends(require_admin)):
+    pays = await db.payments.find({}).to_list(None)
+    rows = []
+    for p in pays:
+        sub = await db.subscriptions.find_one({"_id": ObjectId(p["subscription_id"])})
+        user = await db.users.find_one({"_id": ObjectId(sub["user_id"])}) if sub else None
+        svc = await db.services.find_one({"_id": ObjectId(sub["service_id"])}) if sub else None
+        rows.append([
+            str(p.get("_id")),
+            (user or {}).get("name", ""), (user or {}).get("email", ""),
+            (svc or {}).get("name", ""),
+            p.get("period_label", "") or "",
+            str(p.get("amount", 0)),
+            p.get("due_date", "") or "",
+            p.get("status", ""),
+            "yes" if p.get("receipt") else "no",
+            p.get("created_at", "") or "",
+            p.get("last_reminder_at", "") or "",
+        ])
+    resp = _csv_stream(["id", "user_name", "user_email", "service", "period", "amount", "due_date", "status", "receipt_uploaded", "created_at", "last_reminder_at"], rows)
+    resp.headers["Content-Disposition"] = 'attachment; filename="payments.csv"'
+    await log_admin_action(admin, "export_payments_csv", "payments", {"count": len(rows)})
+    return resp
+
+
+# ---------------- Admin: Scheduler manual trigger ---------------- #
+@api.post("/admin/scheduler/run-now")
+async def scheduler_run_now(admin: dict = Depends(require_admin)):
+    result = await _run_due_reminders(actor=admin)
+    return {"ok": True, **result}
 
 
 app.include_router(api)
