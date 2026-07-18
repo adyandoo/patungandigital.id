@@ -1,0 +1,107 @@
+{
+  "theme": "Light mode default, Neo-Brutalist SaaS (Commercial Brutalism) style. Uses warm cream backgrounds, hard black borders, and stark high-saturation accents to create a communal, trustworthy, yet modern tech-forward vibe.",
+  "typography": {
+    "headings": {
+      "font": "Outfit",
+      "classes": "font-bold tracking-tight text-gray-900"
+    },
+    "body": {
+      "font": "IBM Plex Sans",
+      "classes": "text-gray-800 leading-relaxed"
+    },
+    "mono": {
+      "font": "Space Mono",
+      "classes": "tracking-tighter"
+    }
+  },
+  "colors": {
+    "background": {
+      "default": "#F4F3ED",
+      "card": "#FFFFFF",
+      "glass": "rgba(255, 255, 255, 0.7)"
+    },
+    "text": {
+      "primary": "#0A0A0A",
+      "secondary": "#4A4A4A",
+      "light": "#FFFFFF"
+    },
+    "accents": {
+      "primary": "#FF3B30",
+      "secondary": "#007AFF",
+      "tertiary": "#FFD60A",
+      "success": "#34C759"
+    },
+    "border": "#0A0A0A"
+  },
+  "visual_enhancers": {
+    "shadows": {
+      "brutalist_sm": "4px 4px 0px #0A0A0A",
+      "brutalist_md": "8px 8px 0px #0A0A0A",
+      "brutalist_lg": "12px 12px 0px #0A0A0A"
+    },
+    "borders": "2px solid #0A0A0A",
+    "border_radius": "0px or very slight 4px max",
+    "hover_effects": "-translate-x-1 -translate-y-1 shadow-[8px_8px_0px_#0A0A0A] transition-transform duration-200"
+  },
+  "layouts": {
+    "homepage": "Bento grids, overlapping elements, large typography, asymmetrical layout. Generous spacing (p-12 to p-24).",
+    "user_dashboard": "Grid layout (md:grid-cols-3) with bento-style cards for active subs, recent payments. Spacing (gap-6).",
+    "admin_dashboard": "Dense, high-density grid (md:grid-cols-4), tabular data with hard borders. No soft UI here."
+  },
+  "components": {
+    "cards": "White background, 2px black border, 8px 8px black drop shadow. No soft blur.",
+    "buttons": "Slightly rounded rectangles. 2px black border. High-saturation background (e.g., Electric Blue or Red). On hover: shift up and left with increased solid shadow.",
+    "inputs": "Shadcn based but overridden. 2px solid black border, square corners, white background. Focus: ring-0, border-blue-600 shadow-[4px_4px_0px_#0A0A0A]."
+  },
+  "icons_and_assets": {
+    "library": "@phosphor-icons/react",
+    "images": {
+      "hero_friends_tv": {
+        "url": "https://images.unsplash.com/photo-1714978444538-9097293e5b20?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwxfHxncm91cCUyMG9mJTIwZnJpZW5kcyUyMHdhdGNoaW5nJTIwdHYlMjBlbmpveWluZ3xlbnwwfHx8fDE3ODQzODA5MDF8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Group of friends watching TV, usable for hero background or trust sections."
+      },
+      "hero_friends_music": {
+        "url": "https://images.unsplash.com/photo-1511988617509-a57c8a288659?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzZ8MHwxfHNlYXJjaHwxfHxmcmllbmRzJTIwbGlzdGVuaW5nJTIwdG8lMjBtdXNpYyUyMGhhcHB5fGVufDB8fHx8MTc4NDM4MDkwMHww&ixlib=rb-4.1.0&q=85",
+        "description": "Friends listening to music, great for Spotify sub-service highlight."
+      },
+      "netflix_abstract": {
+        "url": "https://images.pexels.com/photos/5852131/pexels-photo-5852131.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Netflix logo on phone, usable for service cards."
+      },
+      "spotify_abstract": {
+        "url": "https://images.pexels.com/photos/31113917/pexels-photo-31113917.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Spotify icon on phone, usable for service cards."
+      },
+      "youtube_abstract": {
+        "url": "https://images.unsplash.com/photo-1705904506626-aba18263a2c7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHwyfHx5b3V0dWJlJTIwbG9nbyUyMHJlZCUyMGJhY2tncm91bmR8ZW58MHx8fHwxNzg0MzgwOTAwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "YouTube logo abstract, usable for service cards."
+      }
+    }
+  },
+  "instructions_to_main_agent": [
+    "Install and use @phosphor-icons/react for all icons (e.g., yarn add @phosphor-icons/react).",
+    "Install and use sonner for toasts (e.g., npx shadcn-ui@latest add sonner).",
+    "Use Shadcn UI components but explicitly override their styles in Tailwind classes to match the 'Commercial Brutalism' aesthetic: 2px black borders, no soft shadows, solid black drop shadows.",
+    "Implement 'Outfit' for headings and 'IBM Plex Sans' for body text. Update index.css or App.css to import these fonts from Google Fonts.",
+    "Never use generic centered layouts. Use asymmetrical or bento grid layouts for the homepage.",
+    "Ensure the application background is a warm cream (#F4F3ED) instead of plain white to provide 'tactile' warmth.",
+    "For the dashboards, use dense but structured layouts. Use the hard borders to separate data points.",
+    "Use Phosphor icons or pure SVGs for service logos if images feel too heavy.",
+    "Implement Framer Motion for interactive micro-animations (e.g., brutalist buttons pressing down on click).",
+    "Include 'data-testid' on all interactive elements (buttons, inputs, links)."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. Avoid this: make creative, distinctive frontends that surprise and delight.",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy and brutalist solid shadows.",
+    "DO NOT use complete `transparent` background in header, overlays, any surface that has content under it.",
+    "You MUST NOT apply universal transition (e.g., transition: all). Always add transitions for specific interactive elements.",
+    "You MUST NOT center align the app container. This disrupts the human natural reading flow.",
+    "Always use modern button styles with interaction animations & color relevant to the app style. Avoid AI slop.",
+    "NEVER use AI assistant Emoji characters.",
+    "Every interaction needs micro-animations - hover states, transitions, entrance animations.",
+    "Use 2-3x more spacing than feels comfortable.",
+    "Prioritize using pre-existing components from src/components/ui when applicable.",
+    "Shadcn components have opinionated rules, change these when customizing to fit the brutalist aesthetic."
+  ]
+}
