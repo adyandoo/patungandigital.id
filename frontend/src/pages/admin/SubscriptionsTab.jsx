@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { PlusCircle, Trash } from "@phosphor-icons/react";
 import { Modal, F, SearchInput } from "./shared";
 import DatePicker from "@/components/DatePicker";
+import { useSortableTable } from "@/lib/useSortableTable";
 
 export default function SubscriptionsTab() {
   const [subs, setSubs] = useState([]);
@@ -26,6 +27,13 @@ export default function SubscriptionsTab() {
     );
   }, [subs, q]);
 
+  const { sorted, HeaderButton } = useSortableTable(filtered, null, "asc", {
+    "user": (r) => r.user?.name || r.user?.email || "",
+    "service": (r) => r.service?.name || "",
+    "price": (r) => r.price || 0,
+    "start": (r) => r.start_date || "",
+  });
+
   const del = async (id) => {
     if (!window.confirm("Hapus subscription?")) return;
     await api.delete(`/admin/subscriptions/${id}`);
@@ -44,10 +52,19 @@ export default function SubscriptionsTab() {
       <div className="brutal overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-black text-white">
-            <tr>{["User", "Service", "Role", "Group", "Mulai", "Harga", "Status", "Aksi"].map((h) => <th key={h} className="text-left px-4 py-3 font-mono uppercase text-xs">{h}</th>)}</tr>
+            <tr>
+              <th className="text-left px-4 py-3"><HeaderButton k="user" label="User" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="service" label="Service" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="role" label="Role" /></th>
+              <th className="text-left px-4 py-3 font-mono uppercase text-xs">Group</th>
+              <th className="text-left px-4 py-3"><HeaderButton k="start" label="Mulai" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="price" label="Harga" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="status" label="Status" /></th>
+              <th className="text-left px-4 py-3 font-mono uppercase text-xs">Aksi</th>
+            </tr>
           </thead>
           <tbody data-testid="subs-table">
-            {filtered.map((s) => (
+            {sorted.map((s) => (
               <tr key={s.id} className="border-t-2 border-black">
                 <td className="px-4 py-3 font-semibold">{s.user?.name || "?"}</td>
                 <td className="px-4 py-3">{s.service?.name}</td>

@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /dashboard
+Disallow: /reset-password
+Disallow: /verify-email
+Disallow: /auth-callback
+
+Sitemap: https://patungandigital.id/api/sitemap.xml

@@ -21,9 +21,15 @@ export default function Register() {
     e.preventDefault();
     setLoading(true);
     try {
-      await register(form);
-      toast.success("Akun berhasil dibuat!");
-      nav("/dashboard");
+      const result = await register(form);
+      if (result?.email_verification_sent) {
+        toast.success("Cek email untuk verifikasi. Link berlaku 24 jam.");
+        nav(`/register-check-email?email=${encodeURIComponent(form.email)}`);
+      } else if (result?.user) {
+        // Legacy: unlikely path but keep working
+        toast.success("Akun berhasil dibuat!");
+        nav("/dashboard");
+      }
     } catch (err) {
       toast.error(err.message);
     } finally {

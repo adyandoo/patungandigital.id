@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { PlusCircle, PaperPlaneTilt, Eye, Image as ImageIcon, DownloadSimple } from "@phosphor-icons/react";
 import { Modal, F, SearchInput } from "./shared";
 import DatePicker from "@/components/DatePicker";
+import { useSortableTable } from "@/lib/useSortableTable";
 
 export default function PaymentsTab() {
   const [payments, setPayments] = useState([]);
@@ -32,6 +33,12 @@ export default function PaymentsTab() {
       );
     });
   }, [payments, q, statusFilter]);
+
+  const { sorted, HeaderButton } = useSortableTable(filtered, null, "asc", {
+    "user": (r) => r.user?.name || r.user?.email || "",
+    "amount": (r) => r.amount || 0,
+    "due_date": (r) => r.due_date || "",
+  });
 
   const setStatus = async (id, status) => {
     await api.patch(`/admin/payments/${id}`, { status });
@@ -91,11 +98,18 @@ export default function PaymentsTab() {
           <thead className="bg-black text-white">
             <tr>
               <th className="px-3 py-3"><input type="checkbox" checked={allSelected} onChange={toggleAll} data-testid="payments-select-all" /></th>
-              {["User", "Service", "Periode", "Jumlah", "Jatuh Tempo", "Status", "Bukti", "Aksi"].map((h) => <th key={h} className="text-left px-4 py-3 font-mono uppercase text-xs">{h}</th>)}
+              <th className="text-left px-4 py-3"><HeaderButton k="user" label="User" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="service_name" label="Service" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="period_label" label="Periode" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="amount" label="Jumlah" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="due_date" label="Jatuh Tempo" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="status" label="Status" /></th>
+              <th className="text-left px-4 py-3 font-mono uppercase text-xs">Bukti</th>
+              <th className="text-left px-4 py-3 font-mono uppercase text-xs">Aksi</th>
             </tr>
           </thead>
           <tbody data-testid="payments-table">
-            {filtered.map((p) => (
+            {sorted.map((p) => (
               <tr key={p.id} className="border-t-2 border-black">
                 <td className="px-3 py-3"><input type="checkbox" data-testid={`payment-check-${p.id}`} checked={selected.includes(p.id)} onChange={() => toggle(p.id)} /></td>
                 <td className="px-4 py-3 font-semibold">{p.user?.name || "?"}</td>

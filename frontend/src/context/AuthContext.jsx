@@ -43,14 +43,22 @@ export function AuthProvider({ children }) {
     setError("");
     try {
       const { data } = await api.post("/auth/register", payload);
-      if (data.token) localStorage.setItem("pd_token", data.token);
-      setUser(data.user);
-      return data.user;
+      // With email verification, no auto-login. Return the response for the page to handle.
+      if (data.token && data.user) {
+        localStorage.setItem("pd_token", data.token);
+        setUser(data.user);
+      }
+      return data;
     } catch (e) {
       const msg = formatApiError(e.response?.data?.detail) || e.message;
       setError(msg);
       throw new Error(msg);
     }
+  };
+
+  const setToken = (token) => {
+    if (token) localStorage.setItem("pd_token", token);
+    else localStorage.removeItem("pd_token");
   };
 
   const logout = async () => {
@@ -62,7 +70,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, error, login, register, logout, refresh, setUser }}>
+    <AuthContext.Provider value={{ user, error, login, register, logout, refresh, setUser, setToken }}>
       {children}
     </AuthContext.Provider>
   );

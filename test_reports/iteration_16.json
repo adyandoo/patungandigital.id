@@ -1,0 +1,54 @@
+{
+  "summary": "Iter16 testing complete: P0 email verification flow (register no-token, verify, expired, invalid, resend rate-limiting), P1 robots.txt + sitemap, P2 sortable headers on Payments + Subscriptions tabs. All 12 backend tests pass and all frontend flows verified.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter16_email_verify.py",
+    "/app/test_reports/pytest/iter16.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is ~2000+ lines (over 700 line threshold) — recommend splitting into modules (auth, admin, payments, referrals, sitemap).",
+    "verify_email currently auto-logs-in via cookie AND returns token in body. Frontend uses body token; cookie also set — harmless but duplicate.",
+    "resend-verification response leaks 'rate_limited:true' which enables enumeration of recently-registered emails (minor). Consider returning generic body.",
+    "Register response includes 'email_mocked' flag — useful for dev, but not shown to user. OK.",
+    "Chart width(-1) console warnings appear on admin dashboard (Recharts container size) — pre-existing, non-blocking."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter16_email_verify.py (new)"
+  ],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "100% (all P0/P1/P2 flows verified)"},
+  "test_credentials": "admin@patungandigital.id / Adm!nPd-JavpOaidEa6wZgFnBS",
+  "seed_data_creation": "Test users prefixed with test_iter16_ and test_legacy_ auto-cleaned in test_zzz_cleanup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend tests use http://localhost:8001 directly (not REACT_APP_BACKEND_URL) so they share the same local Mongo for injecting known verification tokens. UI tests use REACT_APP_BACKEND_URL. Note: emails are lowercased by /auth/register, so test emails must be lowercase to match DB lookups.",
+  "verified": {
+    "P0_backend": [
+      "POST /auth/register creates user with email_verified=false, auth_provider='manual', no token in response, email_verification_sent=true, db.email_verifications row created",
+      "POST /auth/login with unverified manual user → 403 with 'verifikasi' message",
+      "Legacy user (no auth_provider field) still logs in successfully",
+      "Admin login still works",
+      "POST /auth/verify-email with valid token → 200 + user + token, sets email_verified=true; re-use of same token → 400",
+      "POST /auth/verify-email with expired token → 400 'kadaluarsa'",
+      "POST /auth/verify-email with invalid token → 400 'tidak valid'",
+      "POST /auth/resend-verification within 3-min window → rate_limited=true, no new token inserted",
+      "POST /auth/resend-verification when no recent token → creates new verification row",
+      "Google upsert path in code sets auth_provider='google' and email_verified=true (server.py lines 1869-1871)"
+    ],
+    "P1_backend": [
+      "/app/frontend/public/robots.txt exists with 'Sitemap: https://patungandigital.id/api/sitemap.xml' + Disallow rules for /admin /dashboard /reset-password /verify-email /auth-callback",
+      "GET /api/sitemap.xml returns valid XML with <urlset> and <url> entries"
+    ],
+    "P0_frontend": [
+      "Register form submit navigates to /register-check-email?email=... (NOT /dashboard)",
+      "/register-check-email shows data-testid='check-email-page' with email + 3-step guide + resend-btn",
+      "Login attempt with unverified user shows toast/error text containing 'verifikasi' (403 returned)",
+      "/verify-email?token=invalid shows data-testid='verify-email-page' with error state + data-testid='resend-verification-form'"
+    ],
+    "P2_frontend": [
+      "PaymentsTab: sort-user, sort-service_name, sort-amount, sort-due_date, sort-status all present and clickable; ASC↔DESC toggle works",
+      "SubscriptionsTab: sort-user, sort-service, sort-price, sort-start, sort-status all present and clickable; toggle works"
+    ]
+  }
+}

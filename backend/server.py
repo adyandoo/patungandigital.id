@@ -950,6 +950,42 @@ api = APIRouter(prefix="/api")
 
 
 # ---------------- Auth routes ---------------- #
+async def _send_verification_email(user_id: str, email: str, name: str) -> dict:
+    """Generate token, save it, send email. Returns {mocked, sent, token(for tests)}."""
+    token = secrets.token_urlsafe(32)
+    await db.email_verifications.insert_one({
+        "user_id": user_id,
+        "email": email,
+        "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+        "expires_at": now_utc() + timedelta(hours=24),
+        "used": False,
+        "created_at": now_utc(),
+    })
+    frontend = os.environ.get("FRONTEND_URL", "").rstrip("/")
+    verify_url = f"{frontend}/verify-email?token={token}"
+    html = f"""
+    <h2>Verifikasi email — patungandigital.id</h2>
+    <p>Halo {name},</p>
+    <p>Klik tombol di bawah untuk memverifikasi email kamu. Link berlaku 24 jam.</p>
+    <p><a href="{verify_url}" style="background:#FF3B30;color:#fff;padding:12px 20px;text-decoration:none;font-weight:bold;border:2px solid #000;">Verifikasi Email</a></p>
+    <p>Atau salin URL ini: <code>{verify_url}</code></p>
+    <p>Jika kamu tidak mendaftar, abaikan email ini.</p>
+    """
+    result = await _send_email(email, "Verifikasi Email — patungandigital.id", html)
+    # For dev/test: also include raw token in log so we can complete flow without SendGrid
+    if result.get("mocked"):
+        logger.info(f"[MOCK VERIFY EMAIL] token for {email}: {token}")
+    return {**result, "verify_url": verify_url}
+
+
+class ResendVerificationInput(BaseModel):
+    email: EmailStr
+
+
+class VerifyEmailInput(BaseModel):
+    token: str
+
+
 @api.post("/auth/register")
 async def register(input: RegisterInput, response: Response):
     email = input.email.lower()
@@ -972,16 +1008,64 @@ async def register(input: RegisterInput, response: Response):
         "referred_by": referred_by,
         "referral_code": None,
         "referral_credit": 0,
+        "email_verified": False,
+        "auth_provider": "manual",
         "created_at": now_utc().isoformat(),
     }
     result = await db.users.insert_one(doc)
     doc["_id"] = result.inserted_id
     # generate referral code
     await ensure_referral_code(str(result.inserted_id))
-    doc = await db.users.find_one({"_id": result.inserted_id})
-    token = create_token(str(result.inserted_id))
+    # Send verification email (do NOT auto-login)
+    email_res = await _send_verification_email(str(result.inserted_id), email, input.name)
+    return {
+        "ok": True,
+        "message": "Akun dibuat. Cek inbox untuk verifikasi email. Link berlaku 24 jam.",
+        "email_verification_sent": True,
+        "email_mocked": email_res.get("mocked", False),
+    }
+
+
+@api.post("/auth/verify-email")
+async def verify_email(input: VerifyEmailInput, response: Response):
+    th = hashlib.sha256(input.token.encode()).hexdigest()
+    rec = await db.email_verifications.find_one({"token_hash": th, "used": False})
+    if not rec:
+        raise HTTPException(400, "Token tidak valid atau sudah dipakai.")
+    exp = rec.get("expires_at")
+    if isinstance(exp, datetime) and exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if not exp or exp < now_utc():
+        raise HTTPException(400, "Token kadaluarsa. Minta link verifikasi baru.")
+    # Mark user verified
+    await db.users.update_one(
+        {"_id": ObjectId(rec["user_id"])},
+        {"$set": {"email_verified": True, "email_verified_at": now_utc().isoformat()}},
+    )
+    await db.email_verifications.update_one({"_id": rec["_id"]}, {"$set": {"used": True, "used_at": now_utc()}})
+    user = await db.users.find_one({"_id": ObjectId(rec["user_id"])})
+    # Auto-login on successful verification
+    token = create_token(rec["user_id"])
     response.set_cookie("access_token", token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
-    return {"user": user_out(doc), "token": token}
+    await log_admin_action(None, "email_verified", f"user:{rec['user_id']}", {"email": rec.get("email")})
+    return {"ok": True, "user": user_out(user), "token": token}
+
+
+@api.post("/auth/resend-verification")
+async def resend_verification(input: ResendVerificationInput):
+    """Regenerate + email a fresh verification link. Rate-limited: 1 per 3 min per email."""
+    email = input.email.lower()
+    # Rate-limit
+    recent = await db.email_verifications.find_one({
+        "email": email,
+        "created_at": {"$gte": now_utc() - timedelta(minutes=3)},
+    })
+    if recent:
+        return {"ok": True, "rate_limited": True, "message": "Cek email untuk link terbaru."}
+    user = await db.users.find_one({"email": email})
+    if user and not user.get("email_verified"):
+        await _send_verification_email(str(user["_id"]), email, user.get("name", ""))
+    return {"ok": True, "message": "Jika email terdaftar dan belum diverifikasi, kami sudah mengirim link baru."}
 
 
 @api.post("/auth/login")
@@ -990,6 +1074,9 @@ async def login(input: LoginInput, response: Response):
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(input.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Email atau password salah")
+    # Block unverified manual signups (Google users are auto-verified; legacy users without flag pass through)
+    if user.get("auth_provider") == "manual" and user.get("email_verified") is False:
+        raise HTTPException(status_code=403, detail="Email belum diverifikasi. Cek inbox untuk link verifikasi atau minta ulang.")
     # Ensure referral code exists for legacy users
     if not user.get("referral_code"):
         await ensure_referral_code(str(user["_id"]))
@@ -1780,6 +1867,8 @@ async def google_exchange(input: GoogleSessionInput, response: Response):
             "role": "user",
             "extra": {},
             "auth_provider": "google",
+            "email_verified": True,
+            "email_verified_at": now_utc().isoformat(),
             "created_at": now_utc().isoformat(),
         }
         result = await db.users.insert_one(doc)

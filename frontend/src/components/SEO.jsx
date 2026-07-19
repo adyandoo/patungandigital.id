@@ -1,6 +1,7 @@
 import { Helmet } from "react-helmet-async";
 
-/** SEO component — sets title, meta description, OpenGraph, Twitter, canonical, optional JSON-LD. */
+/** SEO component — sets title, meta description, OpenGraph, Twitter, canonical, optional JSON-LD.
+ *  Also injects Google Search Console verification meta if REACT_APP_GSC_VERIFY is set. */
 export default function SEO({
   title,
   description,
@@ -15,10 +16,12 @@ export default function SEO({
   const desc = description || "Patungan legal & aman untuk Netflix, Spotify, YouTube dan layanan digital premium lainnya. Bayar setengah harga, tetap dapat akses full.";
   const url = canonical || (typeof window !== "undefined" ? window.location.href : "");
   const imgUrl = image || `${typeof window !== "undefined" ? window.location.origin : ""}/og-default.png`;
+  const gscToken = process.env.REACT_APP_GSC_VERIFY;
   return (
     <Helmet>
       <title>{fullTitle}</title>
       <meta name="description" content={desc} />
+      {gscToken && <meta name="google-site-verification" content={gscToken} />}
       {noindex && <meta name="robots" content="noindex, nofollow" />}
       {canonical && <link rel="canonical" href={canonical} />}
       <meta property="og:type" content={type} />

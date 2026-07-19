@@ -11,6 +11,8 @@ import UserDashboard from "@/pages/UserDashboard";
 import AdminDashboard from "@/pages/AdminDashboard";
 import AuthCallback from "@/pages/AuthCallback";
 import ResetPassword from "@/pages/ResetPassword";
+import VerifyEmail from "@/pages/VerifyEmail";
+import RegisterCheckEmail from "@/pages/RegisterCheckEmail";
 import About from "@/pages/About";
 import { BlogList, BlogPost } from "@/pages/Blog";
 import "@/App.css";
@@ -25,6 +27,8 @@ function AppRouter() {
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/verify-email" element={<VerifyEmail />} />
+      <Route path="/register-check-email" element={<RegisterCheckEmail />} />
       <Route path="/about" element={<About />} />
       <Route path="/blog" element={<BlogList />} />
       <Route path="/blog/:slug" element={<BlogPost />} />
