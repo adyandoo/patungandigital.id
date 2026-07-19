@@ -49,11 +49,24 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - **Search + Filter** (P4): SearchInput component with clear button on Users, Payments (+ status dropdown), Subscriptions tabs. useMemo-based client-side filter across relevant text fields.
 - Testing: 45/45 backend tests PASS (9 new), all frontend flows verified. No regressions.
 
+## Iteration 4 (2026-02-19) — Midtrans, Referral, Split, Analytics optimization
+- **Midtrans (P0)**: Replaced Xendit. Server/Client/Merchant keys in `backend/.env`. `admin_create_payment` calls Midtrans Snap `/snap/v1/transactions` → stores `midtrans_token` + `midtrans_redirect_url`. `POST /api/webhooks/midtrans` verifies SHA512 signature, maps `settlement`/`capture+accept` → paid, `cancel/deny/expire/failure` → overdue. User's payment card shows "Bayar via Midtrans" button. Xendit webhook kept for backward compat.
+- **Referral (P3)**:
+  - `user.referral_code` (unique, auto-generated on register/first login), `user.referred_by`, `user.referral_credit`, `user.first_paid_at`.
+  - `POST /api/auth/register` accepts optional `referral_code`; Register page autofills from `?ref=CODE` URL param.
+  - On admin update payment status → `paid`, `apply_referral_rewards_if_first_paid` credits Rp 10.000 to BOTH users (idempotent via `first_paid_at`).
+  - On `admin_create_payment`, if user has `referral_credit > 0`, auto-subtract from amount (payment stores `referral_credit_applied` for admin visibility).
+  - New collection `referral_rewards` tracks each reward event.
+  - `GET /api/me/referral-stats` returns code/credit/invited/earned/referred_by.
+  - New ReferralPanel tab in UserDashboard with copy code, copy link (`?ref=`), WhatsApp share button.
+- **Split AdminDashboard (P2)**: 916 → 75 lines orchestrator. Extracted to `/pages/admin/OverviewTab.jsx`, `UsersTab.jsx`, `ServicesTab.jsx`, `SubscriptionsTab.jsx`, `PaymentsTab.jsx`, `ReminderTab.jsx`, `ActivityTab.jsx`, `shared.jsx` (Modal/F/SearchInput/Note).
+- **Analytics $lookup (P2)**: Single aggregation pipeline joins payments→subscriptions→services in one round-trip instead of N+1 Python loop.
+- Testing: 55/55 backend tests PASS (10 new). All frontend flows verified. No bugs.
+
 ## Backlog / next tasks
-- **P0**: Add real API keys → enable Xendit invoice creation + Xendit webhook signature verification + SendGrid + Twilio (currently MOCKED).
-- **P1**: Async SendGrid/Twilio clients (`_send_reminder_for_payment` uses sync SDKs).
-- **P2**: Split `AdminDashboard.jsx` (916 lines) into per-tab modules for maintainability.
-- **P2**: Optimize `/api/admin/analytics` with $lookup aggregation (currently O(N) queries).
-- **P2**: ResponsiveContainer parent min-height to silence Recharts width(-1) warnings.
+- **P1**: Real SendGrid key + Twilio credentials → enable live email/WhatsApp notifications.
+- **P1**: Configure Midtrans webhook URL in Midtrans Dashboard (Settings → Payment → Notification URL → `https://group-stream-admin.preview.emergentagent.com/api/webhooks/midtrans`).
+- **P1**: Async SendGrid/Twilio SDK calls (currently sync via run_in_executor).
+- **P2**: Remove Xendit endpoints once Midtrans is fully verified in production.
 - **P2**: Move base64 receipts to object storage once volume grows.
-- **P2**: Homepage testimonial section, FAQ, referral program for shareability.
+- **P2**: Homepage testimonial section, FAQ, and referral CTA banner ("ajak teman, dapat Rp 10.000").
