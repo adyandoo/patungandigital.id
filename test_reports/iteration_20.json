@@ -1,0 +1,32 @@
+{
+  "summary": "Iter20 backend testing: 25/25 tests PASS across voucher CRUD, apply/remove, targeted, expired, max_uses, percent discount, monthly leaderboard run+state, admin subscription PATCH edit, user self-renew anytime, and Iter19 regression.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter20.py",
+    "/app/test_reports/pytest/iter20.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 2470 lines — should be split into routers (auth, subscriptions, payments, admin, leaderboard). Voucher/CMS/analytics are already routers; consider extracting the rest.",
+    "UploadReceiptInput requires payment_id in body while the URL path already contains payment_id — redundant but not a bug. Consider dropping to simplify client contract.",
+    "admin_leaderboard_run_now hard-codes force=True and ignores the documented ?force=true query param — either honor the query param or remove the misleading docstring."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter20.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "admin@patungandigital.id / Adm!nPd-JavpOaidEa6wZgFnBS (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Each test creates TEST_iter20_* users and TEST-prefixed voucher codes. Not cleaned up but harmless (isolated per test run).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "test_iter20.py has 25 tests using parallel pytest-xdist (2 workers). Uses REACT_APP_BACKEND_URL from frontend/.env. Netflix service must exist with price_regular=45000. Receipt upload POST /api/me/payments/{id}/receipt requires payment_id in body (redundant with URL param). Leaderboard run-now always uses force=True regardless of query param.",
+  "rca of the issue": "Two initial failures were test-script bugs — receipt upload payload was missing the required payment_id field. Fixed by adding it. All 25 tests now pass in 96s."
+}

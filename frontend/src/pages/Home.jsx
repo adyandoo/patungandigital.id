@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import api, { rupiah } from "@/lib/api";
-import { UsersThree, Sparkle, ShieldCheck, CurrencyCircleDollar, ArrowRight, Gift, Trophy, Medal, Star, Quotes } from "@phosphor-icons/react";
+import { UsersThree, Sparkle, ShieldCheck, CurrencyCircleDollar, ArrowRight, Gift, Trophy, Medal, Star, Quotes, CaretLeft, CaretRight } from "@phosphor-icons/react";
 import Avatar from "@/components/Avatar";
 import SEO from "@/components/SEO";
 import { useAuth } from "@/context/AuthContext";
@@ -230,22 +230,8 @@ export default function Home() {
               <div className="text-xs font-mono uppercase text-gray-600">{testimonials.stats.count} ulasan</div>
             </div>
           </div>
-          <div className="mt-12 marquee-wrap">
-            <div className="flex gap-6 marquee-track">
-              {[...testimonials.items, ...testimonials.items].map((t, i) => (
-                <div key={`${t.id}-${i}`} className="brutal p-6 w-80 flex-none bg-[#FFF9E6]" data-testid={`testimonial-${t.id}`}>
-                  <Quotes weight="fill" size={28} className="text-[#FF3B30]" />
-                  <div className="flex gap-0.5 mt-3">
-                    {[1,2,3,4,5].map((n) => <Star key={n} weight={n <= t.rating ? "fill" : "regular"} size={14} className={n <= t.rating ? "text-[#FFD60A]" : "text-gray-400"} />)}
-                  </div>
-                  <p className="mt-3 text-sm leading-relaxed line-clamp-6">{t.comment}</p>
-                  <div className="mt-4 flex items-center gap-3">
-                    <Avatar src={t.user?.profile_picture_base64} name={t.user?.name} size={40} />
-                    <div className="font-display font-bold">{t.user?.name || "Anonim"}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
+          <div className="mt-12">
+            <TestimonialCarousel items={testimonials.items} />
           </div>
         </section>
       )}
@@ -345,6 +331,84 @@ function TierChip({ n, reward }) {
       <div className="font-display font-black text-2xl">{n}</div>
       <div className="text-[10px] text-gray-700 uppercase font-mono">teman</div>
       <div className="text-xs font-semibold mt-1">{reward}</div>
+    </div>
+  );
+}
+
+
+function TestimonialCarousel({ items }) {
+  const scrollRef = useRef(null);
+  const [canPrev, setCanPrev] = useState(false);
+  const [canNext, setCanNext] = useState(true);
+
+  const updateArrows = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanPrev(el.scrollLeft > 4);
+    setCanNext(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  };
+  useEffect(() => {
+    updateArrows();
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener("scroll", updateArrows, { passive: true });
+    window.addEventListener("resize", updateArrows);
+    return () => {
+      el.removeEventListener("scroll", updateArrows);
+      window.removeEventListener("resize", updateArrows);
+    };
+  }, [items.length]);
+
+  const scrollBy = (dir) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // scroll by one card width (approx card 320 + gap 24)
+    el.scrollBy({ left: dir * 344, behavior: "smooth" });
+  };
+
+  return (
+    <div className="relative" data-testid="testimonial-carousel">
+      <button
+        onClick={() => scrollBy(-1)}
+        disabled={!canPrev}
+        aria-label="Sebelumnya"
+        className={`hidden md:flex absolute left-0 top-1/2 -translate-y-1/2 -translate-x-4 z-10 brutal-sm w-11 h-11 items-center justify-center ${canPrev ? "bg-black text-white hover:bg-[#FF3B30]" : "bg-gray-200 text-gray-400 cursor-not-allowed"}`}
+        data-testid="testimonial-prev"
+      >
+        <CaretLeft weight="bold" size={22} />
+      </button>
+      <button
+        onClick={() => scrollBy(1)}
+        disabled={!canNext}
+        aria-label="Selanjutnya"
+        className={`hidden md:flex absolute right-0 top-1/2 -translate-y-1/2 translate-x-4 z-10 brutal-sm w-11 h-11 items-center justify-center ${canNext ? "bg-black text-white hover:bg-[#FF3B30]" : "bg-gray-200 text-gray-400 cursor-not-allowed"}`}
+        data-testid="testimonial-next"
+      >
+        <CaretRight weight="bold" size={22} />
+      </button>
+      <div
+        ref={scrollRef}
+        className="flex gap-6 overflow-x-auto scroll-smooth snap-x snap-mandatory pb-4 -mx-2 px-2"
+        style={{ scrollbarWidth: "thin" }}
+        data-testid="testimonial-scroll"
+      >
+        {items.map((t) => (
+          <div key={t.id} className="brutal p-6 w-80 flex-none bg-[#FFF9E6] snap-start" data-testid={`testimonial-${t.id}`}>
+            <Quotes weight="fill" size={28} className="text-[#FF3B30]" />
+            <div className="flex gap-0.5 mt-3">
+              {[1,2,3,4,5].map((n) => <Star key={n} weight={n <= t.rating ? "fill" : "regular"} size={14} className={n <= t.rating ? "text-[#FFD60A]" : "text-gray-400"} />)}
+            </div>
+            <p className="mt-3 text-sm leading-relaxed line-clamp-6">{t.comment}</p>
+            <div className="mt-4 flex items-center gap-3">
+              <Avatar src={t.user?.profile_picture_base64} name={t.user?.name} size={40} />
+              <div className="font-display font-bold">{t.user?.name || "Anonim"}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 text-center text-xs font-mono text-gray-600 md:hidden">
+        Geser kartu ke kiri/kanan untuk melihat testimoni lainnya
+      </div>
     </div>
   );
 }

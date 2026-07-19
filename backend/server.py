@@ -653,6 +653,35 @@ class RenewInput(BaseModel):
     duration_months: Optional[int] = Field(default=None, ge=1, le=24)
 
 
+class VoucherCreate(BaseModel):
+    code: Optional[str] = None  # auto-generate if not provided
+    description: str = Field(default="", max_length=200)
+    discount_amount: int = Field(default=0, ge=0)  # flat discount in Rp
+    discount_percent: float = Field(default=0.0, ge=0, le=100)  # percentage
+    max_uses: int = Field(default=1, ge=1, le=10000)
+    valid_days: int = Field(default=30, ge=1, le=365)  # validity in days from creation
+    applies_to_user_id: Optional[str] = None  # null = global voucher
+    source: str = Field(default="admin_manual", max_length=50)  # admin_manual, leaderboard, referral, etc.
+
+
+class VoucherUpdate(BaseModel):
+    description: Optional[str] = Field(default=None, max_length=200)
+    discount_amount: Optional[int] = Field(default=None, ge=0)
+    discount_percent: Optional[float] = Field(default=None, ge=0, le=100)
+    max_uses: Optional[int] = Field(default=None, ge=1, le=10000)
+    valid_until: Optional[datetime] = None
+    status: Optional[str] = None  # 'active' | 'disabled'
+    applies_to_user_id: Optional[str] = None
+
+
+class VoucherRedeemInput(BaseModel):
+    code: str
+
+
+class VoucherApplyInput(BaseModel):
+    code: str
+
+
 class AboutInput(BaseModel):
     hero_title: str = Field(min_length=1, max_length=120)
     story: str = Field(min_length=1, max_length=4000)
@@ -727,6 +756,10 @@ async def _reminder_scheduler_loop():
             await _retry_pending_welcome_emails()
         except Exception as e:
             logger.warning(f"welcome-email retry tick failed: {e}")
+        try:
+            await _run_monthly_leaderboard_prizes()
+        except Exception as e:
+            logger.warning(f"leaderboard prize tick failed: {e}")
         try:
             await asyncio.wait_for(_scheduler_stop.wait(), timeout=3600)
         except asyncio.TimeoutError:
@@ -882,6 +915,17 @@ async def lifespan(app: FastAPI):
         await db.password_resets.create_index("expires_at", expireAfterSeconds=86400)
     except Exception as e:
         logger.warning(f"Could not create TTL index on password_resets.expires_at: {e}")
+    # Voucher indexes
+    try:
+        await db.vouchers.create_index("code", unique=True)
+    except Exception as e:
+        logger.warning(f"Could not create voucher code index: {e}")
+    try:
+        await db.vouchers.create_index("applies_to_user_id")
+        await db.voucher_redemptions.create_index("user_id")
+        await db.voucher_redemptions.create_index("voucher_id")
+    except Exception as e:
+        logger.warning(f"Voucher redemption index failed: {e}")
     # Seed admin (never force-reset password so admin can change it after login)
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@patungandigital.id")
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
@@ -1134,6 +1178,113 @@ async def _retry_pending_welcome_emails(max_batch: int = 20) -> dict:
     if stats["attempted"]:
         logger.info(f"welcome email retry: {stats}")
     return stats
+
+
+# ---------------- Monthly referral leaderboard prizes (P2) ---------------- #
+# Runs on 1st day of each month WIB. Determines top-3 referrers of the previous month
+# by successful referrals (referred_by=me AND first_paid_at != None in that month) and:
+#   - Top 1: +1 free_months_credit
+#   - Top 2 & 3: create a Rp 15,000 voucher (30-day validity), targeted to that user
+LEADERBOARD_TOP1_MONTHS = 1
+LEADERBOARD_TOP23_VOUCHER = 15000
+
+
+async def _run_monthly_leaderboard_prizes(force: bool = False) -> dict:
+    """Idempotent: uses settings.last_leaderboard_period to short-circuit re-runs."""
+    now = now_utc()
+    now_local = now.astimezone(WIB)
+    # Only run on day 1 unless forced
+    if not force and now_local.day != 1:
+        return {"skipped": "not_day_1"}
+    # Determine "previous month" label — e.g. if today is Feb 1, we award for Jan
+    prev = (now_local.replace(day=1) - timedelta(days=1))
+    period_label = prev.strftime("%Y-%m")  # "2026-01"
+    cfg = await db.settings.find_one({"key": "leaderboard_state"}) or {}
+    if not force and cfg.get("last_period") == period_label:
+        return {"skipped": "already_ran", "period": period_label}
+    # Query: referred users first_paid_at within the previous month
+    month_start = prev.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    next_month_start = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    # Since first_paid_at is stored as ISO string, we query by string comparison of ISO prefixes
+    month_prefix = prev.strftime("%Y-%m")  # matches ISO string prefix
+    referred_users = await db.users.find({
+        "referred_by": {"$ne": None},
+        "first_paid_at": {"$regex": f"^{month_prefix}-"},
+    }).to_list(None)
+    counts = {}
+    for u in referred_users:
+        ref = u.get("referred_by")
+        if not ref:
+            continue
+        counts[ref] = counts.get(ref, 0) + 1
+    # Sort desc by count, then by referrer_id (stable tiebreak)
+    ranking = sorted(counts.items(), key=lambda x: (-x[1], x[0]))[:3]
+    awards = []
+    for idx, (referrer_id, count) in enumerate(ranking):
+        if count < 1:  # skip if 0 successful refs
+            continue
+        rank = idx + 1
+        if not ObjectId.is_valid(referrer_id):
+            continue
+        u = await db.users.find_one({"_id": ObjectId(referrer_id)})
+        if not u:
+            continue
+        if rank == 1:
+            # +1 free month
+            await db.users.update_one(
+                {"_id": u["_id"]},
+                {"$inc": {"free_months_credit": LEADERBOARD_TOP1_MONTHS}},
+            )
+            await db.referral_rewards.insert_one({
+                "referrer_id": referrer_id,
+                "referred_id": None,
+                "payment_id": None,
+                "type": f"leaderboard_top1_{period_label}",
+                "amount": 0,
+                "created_at": now,
+            })
+            awards.append({"rank": 1, "referrer_id": referrer_id, "user_email": u.get("email"), "prize": f"+{LEADERBOARD_TOP1_MONTHS} bulan gratis", "count": count})
+        else:
+            # Rank 2 or 3: create a Rp 15,000 voucher targeted to this user
+            from routers.vouchers import _gen_voucher_code
+            code = _gen_voucher_code(10)
+            # ensure unique
+            while await db.vouchers.find_one({"code": code}):
+                code = _gen_voucher_code(10)
+            voucher_doc = {
+                "code": code,
+                "description": f"Hadiah Leaderboard {period_label} — peringkat {rank}",
+                "discount_amount": LEADERBOARD_TOP23_VOUCHER,
+                "discount_percent": 0.0,
+                "max_uses": 1,
+                "used_count": 0,
+                "valid_until": now + timedelta(days=60),
+                "applies_to_user_id": referrer_id,
+                "source": f"leaderboard_top{rank}",
+                "status": "active",
+                "created_at": now,
+                "created_by": "system",
+            }
+            await db.vouchers.insert_one(voucher_doc)
+            await db.referral_rewards.insert_one({
+                "referrer_id": referrer_id,
+                "referred_id": None,
+                "payment_id": None,
+                "type": f"leaderboard_top{rank}_{period_label}",
+                "amount": LEADERBOARD_TOP23_VOUCHER,
+                "voucher_code": code,
+                "created_at": now,
+            })
+            awards.append({"rank": rank, "referrer_id": referrer_id, "user_email": u.get("email"), "prize": f"Voucher {code} - Rp {LEADERBOARD_TOP23_VOUCHER:,}", "count": count, "voucher_code": code})
+    # Record run
+    await db.settings.update_one(
+        {"key": "leaderboard_state"},
+        {"$set": {"key": "leaderboard_state", "last_period": period_label, "last_run_at": now.isoformat(), "last_awards": awards}},
+        upsert=True,
+    )
+    await log_admin_action(None, "leaderboard_prizes_awarded", f"period:{period_label}", {"awards": awards})
+    logger.info(f"Leaderboard prizes awarded for {period_label}: {len(awards)} winner(s)")
+    return {"period": period_label, "awards": awards, "count": len(awards)}
 
 
 class ResendVerificationInput(BaseModel):
@@ -2128,6 +2279,27 @@ async def invoices_generate_now(admin: dict = Depends(require_admin)):
     return {"ok": True, **result}
 
 
+@api.post("/admin/leaderboard/run-now")
+async def admin_leaderboard_run_now(admin: dict = Depends(require_admin)):
+    """Force-run the monthly leaderboard prize distribution.
+    Ignores the day-of-month check but still idempotent per period via settings.last_leaderboard_period.
+    Set ?force=true query param to also bypass the period check (useful for testing)."""
+    force = True
+    result = await _run_monthly_leaderboard_prizes(force=force)
+    return {"ok": True, **result}
+
+
+@api.get("/admin/leaderboard/state")
+async def admin_leaderboard_state(admin: dict = Depends(require_admin)):
+    """Return the last leaderboard run state (period, awards)."""
+    doc = await db.settings.find_one({"key": "leaderboard_state"}) or {}
+    return {
+        "last_period": doc.get("last_period"),
+        "last_run_at": doc.get("last_run_at"),
+        "last_awards": doc.get("last_awards", []),
+    }
+
+
 class BulkUserImportInput(BaseModel):
     file_base64: str  # CSV file as data URL or raw base64
     file_name: Optional[str] = "users.csv"
@@ -2281,10 +2453,12 @@ from routers.settings import router as settings_router
 from routers.admin_users import router as admin_users_router
 from routers.testimonials import router as testimonials_router
 from routers.cms import router as cms_router
+from routers.vouchers import router as vouchers_router
 app.include_router(settings_router, prefix="/api")
 app.include_router(admin_users_router, prefix="/api")
 app.include_router(testimonials_router, prefix="/api")
 app.include_router(cms_router, prefix="/api")
+app.include_router(vouchers_router, prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,

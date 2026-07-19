@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import api, { rupiah, formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
-import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise, Gift, Copy, ShareNetwork, Trophy, Medal, Circle, CheckFat, Sparkle, UsersThree, Eye, EyeSlash, Key, QrCode, CurrencyCircleDollar, ArrowSquareOut, X as Xicon, Star, ChatCircleDots, ArrowClockwise, Warning, Camera, Trash, Megaphone, Info } from "@phosphor-icons/react";
+import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise, Gift, Copy, ShareNetwork, Trophy, Medal, Circle, CheckFat, Sparkle, UsersThree, Eye, EyeSlash, Key, QrCode, CurrencyCircleDollar, ArrowSquareOut, X as Xicon, Star, ChatCircleDots, ArrowClockwise, Warning, Camera, Trash, Megaphone, Info, TicketFill, Tag } from "@phosphor-icons/react";
 import Avatar from "@/components/Avatar";
 
 export default function UserDashboard() {
@@ -97,6 +97,7 @@ export default function UserDashboard() {
         <TabBtn active={tab === "subs"} onClick={() => setTab("subs")} icon={<Ticket weight="duotone" />} label="Langganan" testid="tab-subs" />
         <TabBtn active={tab === "groups"} onClick={() => setTab("groups")} icon={<UsersThree weight="duotone" />} label="Grup & Akses" testid="tab-groups" />
         <TabBtn active={tab === "payments"} onClick={() => setTab("payments")} icon={<Receipt weight="duotone" />} label="Pembayaran" testid="tab-payments" />
+        <TabBtn active={tab === "vouchers"} onClick={() => setTab("vouchers")} icon={<Tag weight="duotone" />} label="Voucher" testid="tab-vouchers" />
         <TabBtn active={tab === "announcements"} onClick={() => setTab("announcements")} icon={<Megaphone weight="duotone" />} label="Pengumuman" testid="tab-announcements" />
         <TabBtn active={tab === "referral"} onClick={() => setTab("referral")} icon={<Gift weight="duotone" />} label="Referral" testid="tab-referral" />
         <TabBtn active={tab === "testimoni"} onClick={() => setTab("testimoni")} icon={<ChatCircleDots weight="duotone" />} label="Testimoni" testid="tab-testimoni" />
@@ -108,6 +109,7 @@ export default function UserDashboard() {
         {tab === "subs" && <SubsPanel subs={subs} reload={loadAll} openJoin={openJoin} />}
         {tab === "groups" && <GroupsPanel />}
         {tab === "payments" && <PaymentsPanel payments={payments} reload={loadAll} />}
+        {tab === "vouchers" && <VouchersPanel />}
         {tab === "announcements" && <AnnouncementsPanel />}
         {tab === "referral" && <ReferralPanel />}
         {tab === "testimoni" && <TestimoniPanel />}
@@ -274,6 +276,16 @@ function SubsPanel({ subs, reload, openJoin }) {
               {s.end_date && <div><span className="font-mono text-gray-600">Sampai:</span> {formatDate(s.end_date)}</div>}
               <div className="mt-2 font-display font-black text-xl">{rupiah(s.price)}<span className="text-sm font-normal">/periode</span></div>
             </div>
+            {s.status === "active" && (
+              <button
+                disabled={renewingId === s.id}
+                onClick={() => renew(s.id)}
+                className="brutal-btn brutal-btn-yellow text-sm mt-4 justify-center w-full"
+                data-testid={`extend-btn-${s.id}`}
+              >
+                <ArrowClockwise weight="bold" /> {renewingId === s.id ? "Membuat tagihan..." : "Perpanjang langganan"}
+              </button>
+            )}
           </div>
         ))}
       </div>
@@ -404,6 +416,9 @@ function PaymentsPanel({ payments, reload }) {
               )}
             </div>
           </div>
+          {p.status === "pending" && !p.payment_method && (
+            <VoucherRow payment={p} reload={reload} />
+          )}
         </div>
       ))}
       {qrisOpenFor && config && (
@@ -1159,3 +1174,140 @@ function JoinModal({ onClose, onJoined }) {
     </div>
   );
 }
+
+// ---- Voucher row (inline on payment card) ---- //
+function VoucherRow({ payment, reload }) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const apply = async () => {
+    if (!code.trim()) return toast.error("Masukkan kode voucher.");
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/me/payments/${payment.id}/apply-voucher`, { code: code.trim().toUpperCase() });
+      toast.success(`Voucher ${data.voucher_code} diterapkan. Hemat ${rupiah(data.discount_applied)}.`);
+      setCode("");
+      reload && reload();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+  const remove = async () => {
+    if (!window.confirm("Copot voucher dari tagihan ini?")) return;
+    setBusy(true);
+    try {
+      await api.post(`/me/payments/${payment.id}/remove-voucher`);
+      toast.success("Voucher dicopot.");
+      reload && reload();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+
+  if (payment.voucher_code) {
+    return (
+      <div className="mt-4 brutal-sm bg-[#34C759]/15 border-[#34C759] p-3 flex items-center gap-3 flex-wrap" data-testid={`voucher-applied-${payment.id}`}>
+        <Tag weight="fill" size={20} className="text-[#34C759]" />
+        <div className="flex-1 min-w-[200px]">
+          <div className="font-mono text-xs uppercase text-gray-700">Voucher terpakai</div>
+          <div className="font-display font-bold">{payment.voucher_code} — Hemat {rupiah(payment.voucher_discount_amount || 0)}</div>
+        </div>
+        <button onClick={remove} disabled={busy} className="brutal-sm bg-white px-3 py-1 text-xs font-mono uppercase" data-testid={`voucher-remove-${payment.id}`}>
+          Copot
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-4 brutal-sm bg-[#FFF8EC] p-3 flex items-center gap-2 flex-wrap" data-testid={`voucher-row-${payment.id}`}>
+      <Tag weight="duotone" size={20} />
+      <span className="font-mono text-xs uppercase text-gray-700 hidden sm:inline">Punya voucher?</span>
+      <input
+        type="text"
+        value={code}
+        onChange={(e) => setCode(e.target.value.toUpperCase())}
+        placeholder="KODE VOUCHER"
+        className="brutal-input flex-1 min-w-[160px] uppercase font-mono text-sm"
+        data-testid={`voucher-input-${payment.id}`}
+      />
+      <button onClick={apply} disabled={busy} className="brutal-btn brutal-btn-red text-sm" data-testid={`voucher-apply-${payment.id}`}>
+        {busy ? "..." : "Klaim"}
+      </button>
+    </div>
+  );
+}
+
+
+// ---- Vouchers Panel (dashboard tab) ---- //
+function VouchersPanel() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = () => {
+    setLoading(true);
+    api.get("/me/vouchers")
+      .then((r) => { setItems(r.data); setLoading(false); })
+      .catch(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  const copy = (code) => {
+    navigator.clipboard.writeText(code);
+    toast.success(`Kode ${code} disalin.`);
+  };
+
+  if (loading) return <div className="brutal p-8 text-center text-gray-600" data-testid="vouchers-loading">Memuat voucher...</div>;
+
+  return (
+    <div data-testid="vouchers-panel">
+      <div className="brutal p-6 md:p-8 mb-6 bg-gradient-to-br from-[#FFD60A]/40 to-white">
+        <div className="flex items-center gap-3">
+          <Tag weight="fill" size={32} />
+          <div>
+            <div className="font-display font-black text-2xl">Voucher kamu</div>
+            <div className="text-sm text-gray-700 mt-1">Klaim kode voucher di tab <b>Pembayaran</b> saat melunasi tagihan.</div>
+          </div>
+        </div>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="brutal p-8 text-center" data-testid="vouchers-empty">
+          <Tag weight="duotone" size={48} className="mx-auto text-gray-400" />
+          <h3 className="mt-3 font-display font-black text-xl">Belum ada voucher.</h3>
+          <p className="mt-2 text-gray-700 text-sm max-w-md mx-auto">Ajak lebih banyak teman via referral — top-3 referrer bulanan otomatis dapat voucher gratis.</p>
+        </div>
+      ) : (
+        <div className="grid md:grid-cols-2 gap-4" data-testid="vouchers-grid">
+          {items.map((v) => {
+            const isRedeemed = v.is_redeemed;
+            const isExpired = v.is_expired;
+            const dead = isRedeemed || isExpired;
+            return (
+              <div key={v.id} className={`brutal p-5 ${dead ? "bg-gray-100 opacity-70" : "bg-white"}`} data-testid={`voucher-card-${v.id}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="pd-tag bg-[#FF3B30] text-white">{v.source === "leaderboard_top1" ? "🏆 Top 1" : v.source === "leaderboard_top2" ? "🥈 Top 2" : v.source === "leaderboard_top3" ? "🥉 Top 3" : v.source}</div>
+                    <div className="mt-3 font-display font-black text-3xl">{v.discount_percent > 0 ? `${v.discount_percent}%` : rupiah(v.discount_amount)}</div>
+                    <div className="text-xs text-gray-600 mt-1">{v.description || "Voucher potongan"}</div>
+                  </div>
+                  {isRedeemed && <span className="pd-tag bg-[#34C759] text-white text-xs">DIPAKAI</span>}
+                  {isExpired && <span className="pd-tag bg-gray-500 text-white text-xs">EXPIRED</span>}
+                </div>
+                <div className="mt-4 brutal-sm bg-[#FFD60A]/30 p-3 flex items-center justify-between gap-2">
+                  <div className="font-mono font-black text-lg tracking-wider" data-testid={`voucher-code-${v.id}`}>{v.code}</div>
+                  {!dead && (
+                    <button onClick={() => copy(v.code)} className="brutal-sm p-2 bg-white" data-testid={`voucher-copy-${v.id}`} title="Salin kode">
+                      <Copy weight="bold" size={16} />
+                    </button>
+                  )}
+                </div>
+                <div className="mt-3 text-xs font-mono text-gray-600">
+                  Berlaku sampai: {v.valid_until ? new Date(v.valid_until).toLocaleDateString("id-ID") : "-"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+

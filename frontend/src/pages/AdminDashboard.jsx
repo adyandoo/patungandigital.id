@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
-import { Users, PaperPlaneTilt, Receipt, Storefront, Ticket, GearSix, ClockCounterClockwise, UsersThree, Clock, QrCode, CalendarPlus, ChatCircleDots, Info, Newspaper, Megaphone } from "@phosphor-icons/react";
+import { Users, PaperPlaneTilt, Receipt, Storefront, Ticket, GearSix, ClockCounterClockwise, UsersThree, Clock, QrCode, CalendarPlus, ChatCircleDots, Info, Newspaper, Megaphone, Tag } from "@phosphor-icons/react";
 import OverviewTab from "./admin/OverviewTab";
 import UsersTab from "./admin/UsersTab";
 import ServicesTab from "./admin/ServicesTab";
@@ -16,6 +16,7 @@ import WaitlistTab from "./admin/WaitlistTab";
 import AboutTab from "./admin/AboutTab";
 import BlogTab from "./admin/BlogTab";
 import AnnouncementsTab from "./admin/AnnouncementsTab";
+import VouchersTab from "./admin/VouchersTab";
 
 const TABS = [
   { id: "overview", label: "Overview", icon: <GearSix weight="duotone" />, Comp: OverviewTab },
@@ -24,6 +25,7 @@ const TABS = [
   { id: "subscriptions", label: "Subscriptions", icon: <Ticket weight="duotone" />, Comp: SubscriptionsTab },
   { id: "groups", label: "Groups", icon: <UsersThree weight="duotone" />, Comp: GroupsTab },
   { id: "payments", label: "Payments", icon: <Receipt weight="duotone" />, Comp: PaymentsTab },
+  { id: "vouchers", label: "Voucher", icon: <Tag weight="duotone" />, Comp: VouchersTab },
   { id: "payment-settings", label: "Payment Config", icon: <QrCode weight="duotone" />, Comp: PaymentSettingsTab },
   { id: "auto-invoice", label: "Auto Invoice", icon: <CalendarPlus weight="duotone" />, Comp: AutoInvoiceTab },
   { id: "testimonials", label: "Testimoni", icon: <ChatCircleDots weight="duotone" />, Comp: TestimonialsTab },

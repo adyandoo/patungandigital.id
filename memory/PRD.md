@@ -261,8 +261,27 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - **P2 DEFERRED — Extract routers/auth.py**: Auth section (~350 lines) not extracted this iteration due to risk of breaking JWT/Google login flow. Will attempt in Iter 20 after adding a full auth backend test suite as a safety net.
 - **BONUS FIX — Concurrent register race**: Testing agent found pre-existing race: `users.referral_code` index used `sparse=True` which still treats `null` as present, causing DuplicateKeyError under concurrent registrations. Fixed by: (a) omitting `referral_code` from initial insert doc (uses `ensure_referral_code` after insert), (b) recreating the index with `partialFilterExpression={referral_code: {$type: "string"}}`. Verified index_information() shows the new partial filter.
 
+## Iteration 20 (2026-02-19) — Voucher system + Monthly leaderboard prizes + Sub editing + Manual carousel
+- **P0 NEW — Admin manual subscription editing**: SubscriptionsTab now has Edit button (pencil icon) per row → opens SubModal in edit mode with all fields (role, price, status, duration_months) + DatePickers for `start_date`/`end_date` (labeled "Batas awal langganan" & "Batas akhir langganan"). Uses existing PATCH `/admin/subscriptions/{id}` endpoint.
+- **P0 NEW — User self-renew anytime**: Every active subscription card in User Dashboard SubsPanel now shows "Perpanjang langganan" button (yellow). Uses existing `/me/subscriptions/{sub_id}/renew` endpoint. Previously only shown in the expiring-soon warning banner.
+- **P1 NEW — Manual testimonial carousel**: Homepage testimonial section replaced marquee auto-scroll with a `TestimonialCarousel` component. Horizontal scroll-snap with mandatory snap points, prev/next arrow buttons (desktop, disabled at edges), swipe gesture (mobile) with hint. No auto-scroll — 100% user-controlled.
+- **P3 NEW — Voucher system**:
+  - New router `/app/backend/routers/vouchers.py` with full CRUD + apply/remove flows
+  - Admin endpoints: `POST/GET/PATCH/DELETE /api/admin/vouchers` with target_user_id filter, discount amount/percent, max_uses, valid_days.
+  - User endpoints: `GET /api/me/vouchers`, `POST /api/me/payments/{id}/apply-voucher`, `POST /api/me/payments/{id}/remove-voucher`.
+  - Voucher validation: active status, not expired, not exceeded max_uses, not already redeemed by same user, applies_to_user_id match if targeted.
+  - Payment discount: `min(voucher_amount, base_amount)` — cannot go negative. Stored on payment as `voucher_applied_id`, `voucher_code`, `voucher_discount_amount`.
+  - MongoDB: `vouchers` collection (indexed on code unique, applies_to_user_id) + `voucher_redemptions` collection.
+  - Frontend: New `VouchersPanel` (user dashboard tab), `VoucherRow` inline on pending payments (input+claim/remove), `VouchersTab` (admin) with sortable table + create/edit modal.
+- **P2 NEW — Monthly leaderboard prizes**:
+  - New scheduler function `_run_monthly_leaderboard_prizes` runs on 1st of each month (WIB). Idempotent via `settings.leaderboard_state.last_period`.
+  - Determines top-3 referrers of previous month by counting `users.first_paid_at` matching that month prefix.
+  - Prizes: Top 1 → +1 `free_months_credit` (auto-applied on next payment). Top 2 & 3 → auto-generated Rp 15,000 voucher (60-day validity, targeted to user, source=`leaderboard_topN`).
+  - Admin endpoints: `POST /api/admin/leaderboard/run-now` (force-run for testing), `GET /api/admin/leaderboard/state` (last run + winners).
+
 ## Backlog / next tasks
 - **P2 (still open)**: Extract `routers/auth.py` — need full auth test suite as safety net first.
+- **P3 (P4 done)**: Notif admin (email) ketika user self-join subscription supaya admin cepat assign grup.
 - **P3**: Object Storage for base64 media.
 - **P3**: SendGrid fallback / dead-letter queue for failed verification emails (currently silent-fail).
 - **P3**: Bounce-detection for invalid emails so unverified users don't accumulate.
