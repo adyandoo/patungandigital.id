@@ -7,7 +7,8 @@ from fastapi import APIRouter, Request, HTTPException
 from server import (
     db, now_utc, log_admin_action,
     midtrans_verify_signature, midtrans_map_status,
-    apply_referral_rewards_if_first_paid, MIDTRANS_SERVER_KEY,
+    apply_referral_rewards_if_first_paid, extend_subscription_from_payment,
+    MIDTRANS_SERVER_KEY,
 )
 
 logger = logging.getLogger("patungan")
@@ -39,6 +40,7 @@ async def midtrans_webhook(request: Request):
     await db.payments.update_one({"_id": obj_id}, {"$set": updates})
     if new_status == "paid":
         await apply_referral_rewards_if_first_paid(payment_id)
+        await extend_subscription_from_payment(payment_id)
     await log_admin_action(None, "midtrans_webhook", f"payment:{payment_id}",
                            {"status": new_status, "raw_status": payload.get("transaction_status")})
     return {"ok": True, "status": new_status}

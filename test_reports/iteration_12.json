@@ -1,0 +1,28 @@
+{
+  "summary": "Iter12: All P0/P1/P2/P3 features tested. 16/16 backend pytest tests pass. Frontend flows (forgot-password link+modal, /reset-password route, admin user-reset-pw button, payments-source-filter dropdown, pay-modal-duration input) all render and are functional.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin Payments -> Buat Tagihan modal", "issues": ["'Jatuh Tempo' uses browser-default date input (mm/dd/yyyy) instead of a shadcn Calendar/date-picker; inconsistent locale (Indonesian UI shows US date format)."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter12.py", "/app/test_reports/pytest/iter12.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 1683 lines — exceeds the 700-line guideline. Refactor moved 3 groups to routers/settings.py + routers/admin_users.py but server.py still hosts payments/subscriptions/services/auth/webhooks. Continue splitting into routers/payments.py, routers/auth.py, routers/subscriptions.py.",
+    "routers/settings.py and routers/admin_users.py import from server.py (db, require_admin, model classes). This works but creates tight coupling; consider extracting shared deps into a common module (e.g., backend/deps.py, backend/models.py) to avoid the risk of circular imports as more routers are added.",
+    "forgot_password / reset_password: no rate limiting on token creation — an attacker could spam /auth/forgot-password for known emails to flood logs and (if SendGrid enabled) burn quota. Consider per-email throttle (e.g., 1 token per 5 min).",
+    "extend_subscription_from_payment updates sub.status only if not already 'active' — good idempotency. But there's no guarantee it runs atomically vs another paid transition (no locks). For low volume this is fine; note for future scale.",
+    "revert_subscription_extension only unsets applied_to_sub_at + rolls back end_date; it does NOT roll back sub.status if the sub had originally been non-active. Acceptable but worth documenting."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter12.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@patungandigital.id / Adm!nPd-JavpOaidEa6wZgFnBS",
+  "seed_data_creation": "Each test run creates ~7 users prefixed with unique RUN_ID (iter12<hex>). Autouse module-scope cleanup calls /api/admin/cleanup-test-users?prefix=<RUN_ID> at end.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter12 fully green. Backend: 16 pytest tests in /app/backend/tests/test_iter12.py cover duration flow (create + patch paid/overdue toggling + upload_receipt + second-payment extend-from-prior-end), password reset (forgot 200 for both known/unknown emails, invalid-token 400, short-pw 422, admin-reset returns default_password and login works, non-admin 403), refactored config endpoints (payment-config/invoice-config/general-config GET+PUT + users/template.csv), TZ scheduler (timezone='Asia/Jakarta' returned + last_run_period_label short-circuit implicitly by consistent period on repeat forced run), and payments filter (?auto_generated=true|false). NOTE: I did NOT test the full forgot->reset flow with a real token because tokens are only delivered by email; consider adding a debug/test endpoint or dependency-inject the token into DB via a fixture that touches Mongo directly if you want that E2E covered. Frontend: only visual/DOM presence + basic interaction verified — no full E2E of admin-reset toast content or forgot-modal success view text.",
+  "rca of the issue": "N/A — no issues found."
+}

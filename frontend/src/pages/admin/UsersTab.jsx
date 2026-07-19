@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { PlusCircle, Trash, PencilSimple, DownloadSimple, X, ShieldStar, UploadSimple, FileText } from "@phosphor-icons/react";
+import { PlusCircle, Trash, PencilSimple, DownloadSimple, X, ShieldStar, UploadSimple, FileText, Key } from "@phosphor-icons/react";
 import { Modal, F, SearchInput } from "./shared";
 
 export default function UsersTab() {
@@ -29,6 +29,14 @@ export default function UsersTab() {
     await api.delete(`/admin/users/${id}`);
     toast.success("User dihapus");
     load();
+  };
+  const resetPw = async (u) => {
+    if (!window.confirm(`Reset password untuk ${u.email}? User akan menerima email pemberitahuan (jika SendGrid aktif) dan bisa login pakai password default.`)) return;
+    try {
+      const { data } = await api.post(`/admin/users/${u.id}/reset-password`, { notify_email: true });
+      const notified = data.email?.sent ? " (email terkirim)" : data.email?.mocked ? " (email mock — SendGrid belum aktif)" : "";
+      toast.success(`Password direset ke: ${data.default_password}${notified}`);
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
   };
   const bulkDelete = async () => {
     if (selected.length === 0) return toast.error("Pilih dulu user-nya");
@@ -107,9 +115,10 @@ export default function UsersTab() {
                 <td className="px-4 py-3 font-mono text-xs">{u.referral_credit ? `Rp ${u.referral_credit.toLocaleString("id-ID")}` : "-"}</td>
                 <td className="px-4 py-3"><span className="pd-tag">{u.role}</span></td>
                 <td className="px-4 py-3 flex gap-2">
-                  <button data-testid={`user-edit-${u.id}`} onClick={() => { setEditing(u); setShowModal(true); }} className="brutal-sm px-2 py-1 bg-[#007AFF] text-white"><PencilSimple weight="bold" /></button>
+                  <button data-testid={`user-edit-${u.id}`} onClick={() => { setEditing(u); setShowModal(true); }} className="brutal-sm px-2 py-1 bg-[#007AFF] text-white" title="Edit"><PencilSimple weight="bold" /></button>
+                  <button data-testid={`user-reset-pw-${u.id}`} onClick={() => resetPw(u)} className="brutal-sm px-2 py-1 bg-[#FFD60A]" title="Reset password ke default"><Key weight="bold" /></button>
                   {u.role !== "admin" && (
-                    <button data-testid={`user-delete-${u.id}`} onClick={() => del(u.id)} className="brutal-sm px-2 py-1 bg-[#FF3B30] text-white"><Trash weight="bold" /></button>
+                    <button data-testid={`user-delete-${u.id}`} onClick={() => del(u.id)} className="brutal-sm px-2 py-1 bg-[#FF3B30] text-white" title="Hapus"><Trash weight="bold" /></button>
                   )}
                 </td>
               </tr>

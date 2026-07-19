@@ -12,12 +12,14 @@ export default function PaymentsTab() {
   const [selected, setSelected] = useState([]);
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [autoFilter, setAutoFilter] = useState("all"); // all | true | false
 
   const load = async () => {
-    const [p, s] = await Promise.all([api.get("/admin/payments"), api.get("/admin/subscriptions")]);
+    const params = autoFilter === "all" ? "" : `?auto_generated=${autoFilter}`;
+    const [p, s] = await Promise.all([api.get(`/admin/payments${params}`), api.get("/admin/subscriptions")]);
     setPayments(p.data); setSubs(s.data); setSelected([]);
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [autoFilter]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -65,6 +67,11 @@ export default function PaymentsTab() {
             <option value="paid">paid</option>
             <option value="overdue">overdue</option>
           </select>
+          <select data-testid="payments-source-filter" value={autoFilter} onChange={(e) => setAutoFilter(e.target.value)} className="brutal-sm bg-white px-3 py-2 text-sm border-2 border-black">
+            <option value="all">Semua sumber</option>
+            <option value="true">Auto-generated</option>
+            <option value="false">Manual</option>
+          </select>
         </div>
         <div className="flex gap-2 flex-wrap">
           {selected.length > 0 && (
@@ -92,7 +99,10 @@ export default function PaymentsTab() {
                 <td className="px-3 py-3"><input type="checkbox" data-testid={`payment-check-${p.id}`} checked={selected.includes(p.id)} onChange={() => toggle(p.id)} /></td>
                 <td className="px-4 py-3 font-semibold">{p.user?.name || "?"}</td>
                 <td className="px-4 py-3">{p.service_name}</td>
-                <td className="px-4 py-3">{p.period_label || "-"}</td>
+                <td className="px-4 py-3">{p.period_label || "-"}
+                  {p.auto_generated && <div className="text-[9px] font-mono uppercase text-gray-500">auto</div>}
+                  {p.duration_months && p.duration_months > 1 && <div className="text-[9px] font-mono uppercase text-[#007AFF]">{p.duration_months} bln</div>}
+                </td>
                 <td className="px-4 py-3">
                   {rupiah(p.amount)}
                   {p.free_month_applied && <div className="text-xs text-[#34C759] font-mono font-bold">FREE MONTH</div>}
@@ -136,13 +146,14 @@ export default function PaymentsTab() {
 }
 
 function PaymentModal({ subs, onClose, onSaved }) {
-  const [form, setForm] = useState({ subscription_id: "", amount: 0, due_date: "", period_label: "" });
+  const [form, setForm] = useState({ subscription_id: "", amount: 0, due_date: "", period_label: "", duration_months: 1 });
   const save = async (e) => {
     e.preventDefault();
     try {
       await api.post("/admin/payments", {
         ...form,
         amount: Number(form.amount),
+        duration_months: Number(form.duration_months) || 1,
         due_date: form.due_date ? new Date(form.due_date).toISOString() : null,
       });
       toast.success("Tagihan dibuat"); onSaved();
@@ -158,10 +169,15 @@ function PaymentModal({ subs, onClose, onSaved }) {
           </select>
         </F>
         <F label="Periode (contoh: Feb 2026)"><input required className="brutal-input" value={form.period_label} onChange={(e) => setForm({ ...form, period_label: e.target.value })} /></F>
-        <F label="Jumlah (Rp)"><input type="number" required className="brutal-input" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></F>
+        <div className="grid grid-cols-2 gap-3">
+          <F label="Jumlah (Rp)"><input type="number" required className="brutal-input" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></F>
+          <F label="Durasi (bulan)">
+            <input type="number" min={1} max={24} required className="brutal-input" value={form.duration_months} onChange={(e) => setForm({ ...form, duration_months: e.target.value })} data-testid="pay-modal-duration" />
+          </F>
+        </div>
         <F label="Jatuh tempo"><input type="date" className="brutal-input" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} /></F>
-        <div className="text-xs text-gray-600">Note: kredit referral user (jika ada) akan otomatis dipotong dari jumlah. Snap invoice Midtrans juga dibuat otomatis.</div>
-        <button type="submit" className="brutal-btn brutal-btn-red">Buat tagihan</button>
+        <div className="text-xs text-gray-600">Note: kredit referral user (jika ada) akan otomatis dipotong. Saat lunas, langganan otomatis diperpanjang sebanyak <b>{form.duration_months || 1}</b> bulan dari tanggal berakhir.</div>
+        <button type="submit" className="brutal-btn brutal-btn-red" data-testid="pay-modal-save">Buat tagihan</button>
       </form>
     </Modal>
   );

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
+import api, { formatApiError } from "@/lib/api";
 
 export default function Login() {
   const { login } = useAuth();
@@ -9,6 +10,7 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showForgot, setShowForgot] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -51,6 +53,11 @@ export default function Login() {
           <button disabled={loading} type="submit" data-testid="login-submit" className="brutal-btn brutal-btn-red w-full justify-center mt-8">
             {loading ? "Memproses..." : "Masuk"}
           </button>
+          <div className="mt-3 text-right">
+            <button type="button" onClick={() => setShowForgot(true)} className="text-sm underline font-mono" data-testid="forgot-password-link">
+              Lupa password?
+            </button>
+          </div>
           <div className="my-6 flex items-center gap-3">
             <div className="flex-1 h-[2px] bg-black"></div>
             <span className="font-mono text-xs uppercase">atau</span>
@@ -70,6 +77,51 @@ export default function Login() {
             Lanjut dengan Google
           </button>
         </form>
+      </div>
+      {showForgot && <ForgotModal defaultEmail={email} onClose={() => setShowForgot(false)} />}
+    </div>
+  );
+}
+
+function ForgotModal({ defaultEmail, onClose }) {
+  const [email, setEmail] = useState(defaultEmail || "");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api.post("/auth/forgot-password", { email });
+      setDone(true);
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="brutal-lg bg-white max-w-md w-full" onClick={(e) => e.stopPropagation()} data-testid="forgot-modal">
+        <div className="border-b-2 border-black p-4 bg-[#FFD60A] flex items-center justify-between">
+          <div className="font-display font-black text-xl">Reset Password</div>
+          <button onClick={onClose} className="font-mono text-sm">Tutup</button>
+        </div>
+        <div className="p-6">
+          {done ? (
+            <div data-testid="forgot-done" className="space-y-3">
+              <div className="brutal-sm bg-[#34C759]/30 p-4">
+                Jika email <b>{email}</b> terdaftar, kami sudah mengirim link reset password. Cek inbox/spam. Link berlaku 1 jam.
+              </div>
+              <p className="text-sm text-gray-700">Tidak dapat email? Hubungi admin di WhatsApp untuk reset manual.</p>
+              <button onClick={onClose} className="brutal-btn brutal-btn-red w-full justify-center">OK</button>
+            </div>
+          ) : (
+            <form onSubmit={submit} className="space-y-3">
+              <p className="text-sm text-gray-700">Masukkan email akunmu. Kami akan kirim link reset password.</p>
+              <input required type="email" className="brutal-input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="kamu@email.com" data-testid="forgot-email" />
+              <button type="submit" disabled={busy} className="brutal-btn brutal-btn-red w-full justify-center" data-testid="forgot-submit">
+                {busy ? "Mengirim..." : "Kirim link reset"}
+              </button>
+            </form>
+          )}
+        </div>
       </div>
     </div>
   );

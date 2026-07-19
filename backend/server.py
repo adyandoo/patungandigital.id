@@ -11,6 +11,35 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from contextlib import asynccontextmanager
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # py<3.9 fallback
+    ZoneInfo = None
+try:
+    from dateutil.relativedelta import relativedelta
+except ImportError:
+    relativedelta = None
+
+WIB = ZoneInfo("Asia/Jakarta") if ZoneInfo else timezone(timedelta(hours=7))
+
+
+def now_wib() -> datetime:
+    return now_utc().astimezone(WIB)
+
+
+def add_months(dt: datetime, months: int) -> datetime:
+    """Add N months to a datetime, preserving day of month where possible."""
+    if relativedelta:
+        return dt + relativedelta(months=months)
+    # Fallback: naive month arithmetic
+    y, m = dt.year, dt.month + months
+    while m > 12:
+        m -= 12; y += 1
+    while m < 1:
+        m += 12; y -= 1
+    from calendar import monthrange
+    day = min(dt.day, monthrange(y, m)[1])
+    return dt.replace(year=y, month=m, day=day)
 
 from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).parent
@@ -218,6 +247,80 @@ async def apply_referral_rewards_if_first_paid(payment_id: str):
     await maybe_grant_tier_rewards(str(referrer["_id"]))
 
 
+async def extend_subscription_from_payment(payment_id: str):
+    """When a payment transitions to 'paid', extend the subscription's active period.
+    - start_date = first_paid_at (only set once)
+    - end_date = max(existing end_date if still in future, now) + duration_months
+    Idempotent: safe to call multiple times for the same payment (uses payment.applied_to_sub_at flag)."""
+    p = await db.payments.find_one({"_id": ObjectId(payment_id)})
+    if not p or p.get("status") != "paid":
+        return
+    if p.get("applied_to_sub_at"):
+        return  # already extended
+    sub = await db.subscriptions.find_one({"_id": ObjectId(p["subscription_id"])})
+    if not sub:
+        return
+    now = now_utc()
+    duration = int(p.get("duration_months", 1) or 1)
+    # start_date
+    start = sub.get("start_date")
+    if isinstance(start, str):
+        try: start = datetime.fromisoformat(start)
+        except Exception: start = None
+    if isinstance(start, datetime) and start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if not start or start > now:
+        start = now
+    # existing end_date
+    end = sub.get("end_date")
+    if isinstance(end, str):
+        try: end = datetime.fromisoformat(end)
+        except Exception: end = None
+    if isinstance(end, datetime) and end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    base = end if (end and end > now) else start
+    new_end = add_months(base, duration)
+    await db.subscriptions.update_one(
+        {"_id": sub["_id"]},
+        {"$set": {
+            "start_date": start.isoformat(),
+            "end_date": new_end.isoformat(),
+            "status": "active" if sub.get("status") != "active" else sub.get("status"),
+        }},
+    )
+    await db.payments.update_one(
+        {"_id": ObjectId(payment_id)},
+        {"$set": {"applied_to_sub_at": now.isoformat(), "duration_applied": duration}},
+    )
+
+
+async def revert_subscription_extension(payment_id: str):
+    """If admin flips a paid payment back (refund/reject), undo the extension."""
+    p = await db.payments.find_one({"_id": ObjectId(payment_id)})
+    if not p or not p.get("applied_to_sub_at"):
+        return
+    sub = await db.subscriptions.find_one({"_id": ObjectId(p["subscription_id"])})
+    if not sub:
+        return
+    duration = int(p.get("duration_applied", p.get("duration_months", 1)) or 1)
+    end = sub.get("end_date")
+    if isinstance(end, str):
+        try: end = datetime.fromisoformat(end)
+        except Exception: end = None
+    if isinstance(end, datetime):
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        new_end = add_months(end, -duration)
+        await db.subscriptions.update_one(
+            {"_id": sub["_id"]},
+            {"$set": {"end_date": new_end.isoformat()}},
+        )
+    await db.payments.update_one(
+        {"_id": ObjectId(payment_id)},
+        {"$unset": {"applied_to_sub_at": "", "duration_applied": ""}},
+    )
+
+
 # ---------------- Midtrans helpers ---------------- #
 def midtrans_auth_header() -> str:
     token = base64.b64encode(f"{MIDTRANS_SERVER_KEY}:".encode()).decode()
@@ -403,6 +506,7 @@ class PaymentInput(BaseModel):
     amount: float
     due_date: Optional[datetime] = None
     period_label: Optional[str] = None  # e.g., "Jan 2026"
+    duration_months: int = Field(default=1, ge=1, le=24)
 
 
 class UploadReceiptInput(BaseModel):
@@ -413,6 +517,19 @@ class UploadReceiptInput(BaseModel):
 
 class ChooseMethodInput(BaseModel):
     method: str  # 'qris' or 'midtrans'
+
+
+class ForgotPasswordInput(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordInput(BaseModel):
+    token: str
+    new_password: str = Field(min_length=6)
+
+
+class AdminResetPasswordInput(BaseModel):
+    notify_email: bool = True
 
 
 class PaymentConfigInput(BaseModel):
@@ -476,17 +593,23 @@ async def _reminder_scheduler_loop():
 
 
 async def _run_invoice_generator(actor: Optional[dict] = None, force: bool = False) -> dict:
-    """Generate invoices for active subscriptions on configured day of month.
-    Idempotent: skips if a payment for (subscription_id, period_label) already exists."""
+    """Generate invoices for active subscriptions on configured day of month (WIB).
+    Idempotent: skips if a payment for (subscription_id, period_label) already exists.
+    Uses last_run_period_label to short-circuit re-runs within same period."""
     cfg = await db.settings.find_one({"key": "invoice_config"}) or {}
     if not cfg.get("enabled", True) and not force:
         return {"count": 0, "skipped": "disabled"}
     day = int(cfg.get("day_of_month", 1) or 1)
     due_days = int(cfg.get("due_days", 7) or 7)
     now = now_utc()
-    if not force and now.day != day:
-        return {"count": 0, "skipped": f"not scheduled day (today={now.day}, target={day})"}
-    period_label = now.strftime("%b %Y")  # e.g. "Feb 2026"
+    now_local = now.astimezone(WIB)
+    period_label = now_local.strftime("%b %Y")  # e.g. "Feb 2026" — based on Jakarta calendar
+    if not force:
+        if now_local.day != day:
+            return {"count": 0, "skipped": f"not scheduled day (WIB today={now_local.day}, target={day})"}
+        # Short-circuit: don't rescan every hour on the trigger day
+        if cfg.get("last_run_period_label") == period_label:
+            return {"count": 0, "skipped": f"already ran for period {period_label}"}
     active_subs = await db.subscriptions.find({"status": "active"}).to_list(None)
     created = []
     skipped = []
@@ -510,13 +633,20 @@ async def _run_invoice_generator(actor: Optional[dict] = None, force: bool = Fal
             "receipt": None,
             "payment_method": None,
             "auto_generated": True,
+            "duration_months": int(sub.get("duration_months", 1) or 1),
         }
         res = await db.payments.insert_one(doc)
         created.append(str(res.inserted_id))
+    # Update last_run marker (regardless of force so future ticks still short-circuit)
+    await db.settings.update_one(
+        {"key": "invoice_config"},
+        {"$set": {"last_run_period_label": period_label, "last_run_at": now.isoformat()}},
+        upsert=True,
+    )
     await log_admin_action(actor, "invoice_generator_run", "payments", {
-        "period": period_label, "created": len(created), "skipped": len(skipped), "forced": force,
+        "period": period_label, "created": len(created), "skipped": len(skipped), "forced": force, "wib_day": now_local.day,
     })
-    return {"count": len(created), "created": created, "skipped": len(skipped), "period": period_label}
+    return {"count": len(created), "created": created, "skipped": len(skipped), "period": period_label, "timezone": "Asia/Jakarta"}
 
 
 async def _run_due_reminders(actor: Optional[dict] = None) -> dict:
@@ -735,6 +865,77 @@ async def change_password(input: ChangePasswordInput, user: dict = Depends(get_c
     if not verify_password(input.current_password, full["password_hash"]):
         raise HTTPException(status_code=400, detail="Password saat ini salah")
     await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"password_hash": hash_password(input.new_password)}})
+    return {"ok": True}
+
+
+async def _send_email(to_email: str, subject: str, html: str) -> dict:
+    """Send transactional email via SendGrid. Returns {sent, mocked, error}."""
+    if not os.environ.get("SENDGRID_API_KEY"):
+        logger.info(f"[MOCK EMAIL] to={to_email} subject={subject}\n{html[:200]}")
+        return {"sent": False, "mocked": True}
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+        m = Mail(
+            from_email=os.environ.get("SENDGRID_FROM_EMAIL"),
+            to_emails=to_email,
+            subject=subject,
+            html_content=html,
+        )
+        await asyncio.get_event_loop().run_in_executor(None, lambda: SendGridAPIClient(os.environ["SENDGRID_API_KEY"]).send(m))
+        return {"sent": True, "mocked": False}
+    except Exception as e:
+        logger.warning(f"SendGrid failed: {e}")
+        return {"sent": False, "error": str(e)}
+
+
+@api.post("/auth/forgot-password")
+async def forgot_password(input: ForgotPasswordInput):
+    """Generate a 1-hour reset token and email it. Always returns 200 to avoid enumeration."""
+    email = input.email.lower()
+    user = await db.users.find_one({"email": email})
+    if user:
+        token = secrets.token_urlsafe(32)
+        await db.password_resets.insert_one({
+            "user_id": str(user["_id"]),
+            "email": email,
+            "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+            "expires_at": now_utc() + timedelta(hours=1),
+            "used": False,
+            "created_at": now_utc(),
+        })
+        frontend = os.environ.get("FRONTEND_URL", "").rstrip("/")
+        reset_url = f"{frontend}/reset-password?token={token}"
+        html = f"""
+        <h2>Reset Password patungandigital.id</h2>
+        <p>Halo {user.get('name','')},</p>
+        <p>Klik link di bawah untuk mengatur password baru. Link berlaku 1 jam.</p>
+        <p><a href="{reset_url}" style="background:#FF3B30;color:#fff;padding:12px 20px;text-decoration:none;font-weight:bold;">Reset Password</a></p>
+        <p>Atau salin URL: <code>{reset_url}</code></p>
+        <p>Jika kamu tidak meminta reset, abaikan email ini.</p>
+        """
+        await _send_email(email, "Reset Password — patungandigital.id", html)
+        await log_admin_action(None, "forgot_password_requested", f"user:{user['_id']}", {"email": email})
+    return {"ok": True, "message": "Jika email terdaftar, kami sudah mengirim link reset."}
+
+
+@api.post("/auth/reset-password")
+async def reset_password(input: ResetPasswordInput):
+    th = hashlib.sha256(input.token.encode()).hexdigest()
+    rec = await db.password_resets.find_one({"token_hash": th, "used": False})
+    if not rec:
+        raise HTTPException(400, "Token tidak valid atau sudah dipakai.")
+    exp = rec.get("expires_at")
+    if isinstance(exp, datetime) and exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if not exp or exp < now_utc():
+        raise HTTPException(400, "Token kadaluarsa. Silakan minta reset baru.")
+    await db.users.update_one(
+        {"_id": ObjectId(rec["user_id"])},
+        {"$set": {"password_hash": hash_password(input.new_password)}},
+    )
+    await db.password_resets.update_one({"_id": rec["_id"]}, {"$set": {"used": True, "used_at": now_utc()}})
+    await log_admin_action(None, "password_reset_completed", f"user:{rec['user_id']}", {"email": rec.get("email")})
     return {"ok": True}
 
 
@@ -968,6 +1169,7 @@ async def admin_create_payment(input: PaymentInput, admin: dict = Depends(requir
     doc["receipt"] = None
     doc["payment_method"] = None  # user picks QRIS or Midtrans
     doc["base_amount"] = int(input.amount)  # remember original before credits/fees
+    doc["duration_months"] = int(input.duration_months or 1)
     # Referral credit application: subtract available credit from user
     sub = await db.subscriptions.find_one({"_id": ObjectId(doc["subscription_id"])})
     payer = await db.users.find_one({"_id": ObjectId(sub["user_id"])}) if sub else None
@@ -1047,8 +1249,13 @@ async def choose_payment_method(payment_id: str, input: ChooseMethodInput, user:
 
 
 @api.get("/admin/payments")
-async def admin_list_payments(admin: dict = Depends(require_admin)):
-    pays = await db.payments.find({}).to_list(None)
+async def admin_list_payments(auto_generated: Optional[str] = None, admin: dict = Depends(require_admin)):
+    q = {}
+    if auto_generated == "true":
+        q["auto_generated"] = True
+    elif auto_generated == "false":
+        q["$or"] = [{"auto_generated": {"$ne": True}}, {"auto_generated": {"$exists": False}}]
+    pays = await db.payments.find(q).to_list(None)
     for p in pays:
         p["id"] = oid(p.pop("_id"))
         sub = await db.subscriptions.find_one({"_id": ObjectId(p["subscription_id"])})
@@ -1064,10 +1271,17 @@ async def admin_list_payments(admin: dict = Depends(require_admin)):
 
 @api.patch("/admin/payments/{payment_id}")
 async def admin_update_payment(payment_id: str, body: dict, admin: dict = Depends(require_admin)):
-    allowed = {k: v for k, v in body.items() if k in {"status", "amount", "due_date", "period_label"}}
+    allowed = {k: v for k, v in body.items() if k in {"status", "amount", "due_date", "period_label", "duration_months"}}
+    prev = await db.payments.find_one({"_id": ObjectId(payment_id)})
     await db.payments.update_one({"_id": ObjectId(payment_id)}, {"$set": allowed})
-    if allowed.get("status") == "paid":
+    new_status = allowed.get("status")
+    prev_status = (prev or {}).get("status")
+    if new_status == "paid" and prev_status != "paid":
         await apply_referral_rewards_if_first_paid(payment_id)
+        await extend_subscription_from_payment(payment_id)
+    elif new_status and new_status != "paid" and prev_status == "paid":
+        # Admin reverted a paid payment → undo sub extension
+        await revert_subscription_extension(payment_id)
     p = await db.payments.find_one({"_id": ObjectId(payment_id)})
     p["id"] = oid(p.pop("_id"))
     return p
@@ -1095,11 +1309,12 @@ async def upload_receipt(payment_id: str, input: UploadReceiptInput, user: dict 
     if not p.get("payment_method"):
         updates["payment_method"] = "qris"
     await db.payments.update_one({"_id": ObjectId(payment_id)}, {"$set": updates})
-    # Trigger referral rewards (first paid, race-safe inside helper)
+    # Trigger referral rewards + sub extension (first paid, race-safe inside helpers)
     try:
         await apply_referral_rewards_if_first_paid(payment_id)
+        await extend_subscription_from_payment(payment_id)
     except Exception as e:
-        logger.warning(f"referral apply on upload failed: {e}")
+        logger.warning(f"post-paid apply on upload failed: {e}")
     return {"ok": True, "receipt": receipt, "status": "paid"}
 
 
@@ -1307,127 +1522,9 @@ async def invoices_generate_now(admin: dict = Depends(require_admin)):
     return {"ok": True, **result}
 
 
-@api.get("/admin/invoice-config")
-async def get_invoice_config(admin: dict = Depends(require_admin)):
-    cfg = await db.settings.find_one({"key": "invoice_config"}) or {}
-    return {
-        "day_of_month": int(cfg.get("day_of_month", 1) or 1),
-        "due_days": int(cfg.get("due_days", 7) or 7),
-        "enabled": bool(cfg.get("enabled", True)),
-    }
-
-
-@api.put("/admin/invoice-config")
-async def set_invoice_config(input: InvoiceConfigInput, admin: dict = Depends(require_admin)):
-    await db.settings.update_one(
-        {"key": "invoice_config"},
-        {"$set": {**input.model_dump(), "key": "invoice_config"}},
-        upsert=True,
-    )
-    await log_admin_action(admin, "update_invoice_config", "settings", input.model_dump())
-    return {"ok": True}
-
-
-@api.get("/admin/general-config")
-async def get_general_config(admin: dict = Depends(require_admin)):
-    cfg = await db.settings.find_one({"key": "general_config"}) or {}
-    return {"default_new_user_password": cfg.get("default_new_user_password", "patungan123")}
-
-
-@api.put("/admin/general-config")
-async def set_general_config(input: GeneralConfigInput, admin: dict = Depends(require_admin)):
-    await db.settings.update_one(
-        {"key": "general_config"},
-        {"$set": {**input.model_dump(), "key": "general_config"}},
-        upsert=True,
-    )
-    await log_admin_action(admin, "update_general_config", "settings", {"password_changed": True})
-    return {"ok": True}
-
-
-# ---------------- Admin: Users bulk import + template ---------------- #
-@api.get("/admin/users/template.csv")
-async def users_import_template(admin: dict = Depends(require_admin)):
-    header = ["name", "email", "username", "whatsapp", "gender", "password"]
-    sample = [
-        ["Budi Santoso", "budi@example.com", "budi", "628123456789", "male", ""],
-        ["Ani Wijaya", "ani@example.com", "", "", "female", "mypassword"],
-    ]
-    resp = _csv_stream(header, sample)
-    resp.headers["Content-Disposition"] = 'attachment; filename="users_template.csv"'
-    return resp
-
-
 class BulkUserImportInput(BaseModel):
     file_base64: str  # CSV file as data URL or raw base64
     file_name: Optional[str] = "users.csv"
-
-
-@api.post("/admin/users/import")
-async def import_users_csv(input: BulkUserImportInput, admin: dict = Depends(require_admin)):
-    """Bulk import users from CSV. Skips rows with existing email or invalid data."""
-    import base64 as _b64
-    import csv as _csv
-    import io as _io
-    raw = input.file_base64
-    if "," in raw and raw.startswith("data:"):
-        raw = raw.split(",", 1)[1]
-    try:
-        content = _b64.b64decode(raw).decode("utf-8-sig")
-    except Exception:
-        raise HTTPException(400, "File tidak bisa dibaca (bukan CSV UTF-8)")
-    reader = _csv.DictReader(_io.StringIO(content))
-    if not reader.fieldnames or "email" not in [f.lower().strip() for f in reader.fieldnames]:
-        raise HTTPException(400, "Kolom 'email' wajib ada di header CSV.")
-    # Normalize header keys
-    def norm(k):
-        return (k or "").lower().strip()
-    gcfg = await db.settings.find_one({"key": "general_config"}) or {}
-    default_pw = gcfg.get("default_new_user_password", "patungan123")
-    created, skipped, errors = [], [], []
-    for i, raw_row in enumerate(reader, start=2):  # start=2 because row 1 is header
-        row = {}
-        for k, v in raw_row.items():
-            if isinstance(v, list):
-                v = v[0] if v else ""
-            row[norm(k)] = (v or "").strip() if isinstance(v, str) else ""
-        email = row.get("email", "").lower()
-        name = row.get("name", "") or email.split("@")[0]
-        if not email or "@" not in email:
-            errors.append({"row": i, "reason": "email invalid", "email": email})
-            continue
-        if await db.users.find_one({"email": email}):
-            skipped.append({"row": i, "reason": "email exists", "email": email})
-            continue
-        pw = row.get("password") or default_pw
-        try:
-            doc = {
-                "email": email,
-                "password_hash": hash_password(pw),
-                "name": name,
-                "username": row.get("username") or email.split("@")[0],
-                "whatsapp": row.get("whatsapp") or "",
-                "gender": row.get("gender") or "",
-                "role": "user",
-                "extra": {},
-                "created_at": now_utc().isoformat(),
-                "imported": True,
-            }
-            r = await db.users.insert_one(doc)
-            created.append({"row": i, "email": email, "id": str(r.inserted_id)})
-        except Exception as e:
-            errors.append({"row": i, "reason": str(e), "email": email})
-    await log_admin_action(admin, "import_users_csv", "users", {
-        "created": len(created), "skipped": len(skipped), "errors": len(errors), "default_pw_used": True,
-    })
-    return {
-        "ok": True,
-        "created": created,
-        "skipped": skipped,
-        "errors": errors,
-        "summary": {"created": len(created), "skipped": len(skipped), "errors": len(errors)},
-        "default_password_used": default_pw,
-    }
 
 
 # ---------------- Google Auth (Emergent-managed) ---------------- #
@@ -1510,41 +1607,8 @@ async def google_exchange(input: GoogleSessionInput, response: Response):
 # Moved to routers/webhooks.py
 
 
-# ---------------- Payment config (QRIS image + Midtrans fee) ---------------- #
-@api.get("/payment-config")
-async def get_payment_config_public():
-    """Public endpoint used by user dashboard to render QRIS + fee info."""
-    cfg = await db.settings.find_one({"key": "payment_config"}) or {}
-    return {
-        "qris_image_base64": cfg.get("qris_image_base64"),
-        "qris_notes": cfg.get("qris_notes", ""),
-        "manual_bank_info": cfg.get("manual_bank_info", ""),
-        "midtrans_fee_percent": float(cfg.get("midtrans_fee_percent", 5.0) or 5.0),
-    }
-
-
-@api.get("/admin/payment-config")
-async def admin_get_payment_config(admin: dict = Depends(require_admin)):
-    cfg = await db.settings.find_one({"key": "payment_config"}) or {}
-    cfg.pop("_id", None)
-    return {
-        "qris_image_base64": cfg.get("qris_image_base64"),
-        "qris_notes": cfg.get("qris_notes", ""),
-        "manual_bank_info": cfg.get("manual_bank_info", ""),
-        "midtrans_fee_percent": float(cfg.get("midtrans_fee_percent", 5.0) or 5.0),
-    }
-
-
-@api.put("/admin/payment-config")
-async def admin_set_payment_config(input: PaymentConfigInput, admin: dict = Depends(require_admin)):
-    payload = {k: v for k, v in input.model_dump().items() if v is not None}
-    payload["key"] = "payment_config"
-    await db.settings.update_one({"key": "payment_config"}, {"$set": payload}, upsert=True)
-    await log_admin_action(admin, "update_payment_config", "settings", {
-        "midtrans_fee_percent": payload.get("midtrans_fee_percent"),
-        "qris_updated": bool(input.qris_image_base64),
-    })
-    return {"ok": True}
+# Payment/invoice/general config endpoints moved to routers/settings.py
+# Users bulk import + reset-password moved to routers/admin_users.py
 
 
 # ---------------- Admin: create additional admin ---------------- #
@@ -1604,6 +1668,11 @@ app.include_router(analytics_router, prefix="/api")
 app.include_router(referral_router, prefix="/api")
 app.include_router(webhooks_router, prefix="/api")
 app.include_router(groups_router, prefix="/api")
+# Late imports to avoid circular deps (these routers import from server.py)
+from routers.settings import router as settings_router
+from routers.admin_users import router as admin_users_router
+app.include_router(settings_router, prefix="/api")
+app.include_router(admin_users_router, prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,
