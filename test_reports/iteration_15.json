@@ -1,0 +1,30 @@
+{
+  "summary": "Iter15: 9/9 backend pytest pass (SEO robots.txt content-type/paths/Sitemap line, sitemap.xml urlset+static+published-post inclusion, admin/groups/unassigned-users list+shape+403, auto-assign to existing group with slot, auto-create fallback group with auto_created:true, idempotency on repeat mark-paid, role-promote host conflict 400 + resolution after demote 200). Frontend verified: Home/About/Blog/Post titles all include patungandigital.id; blog post JSON-LD Article present with headline/datePublished/author.name/publisher; Admin Users sort headers sort-name/email/username/whatsapp/referral_code/referral_credit/role clickable and re-order rows (verified email ASC matches expected); Groups tab shows data-testid='groups-by-service' with 8 service-group-block-{sid} blocks, each with service-collapse-{sid} + add-group-for-{sid} buttons; SlotBar rendered with color fill (green visible in screenshot); AssignModal calls /api/admin/groups/unassigned-users?service_id=X (95 candidates), assign-user dropdown + assign-role-regular/host radios present; member rows have promote-/demote-/remove-member- action buttons.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "All pages (SEO meta description)", "issues": ["Duplicate <meta name='description'> tags in DOM: /public/index.html hard-codes 'A product of emergent.sh' and react-helmet-async APPENDS a second meta tag instead of replacing. document.querySelector('meta[name=description]') still returns the emergent default. Fix: remove the default meta description line from /app/frontend/public/index.html (or replace its content with a real fallback). Crawlers may pick either. All Helmet-managed metas (og:description, twitter:description) are correct."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter15.py", "/app/test_reports/pytest/iter15.xml"],
+  "action_items": [
+    "Remove or replace the placeholder <meta name=\"description\" content=\"A product of emergent.sh\"/> in /app/frontend/public/index.html so react-helmet-async's dynamic description wins the CSS-selector lookup (otherwise a duplicate stale tag remains in <head>)."
+  ],
+  "critical_code_review_comments": [
+    "server.py has grown to 1904 lines with mixed concerns (auth, users, services, subs, payments, referral, reminder, midtrans, models). Extract remaining domains (payments, subscriptions, services, models) into routers/ + models.py — same recommendation as iter14 that is still unaddressed.",
+    "auto_assign_group_for_sub() ignores group `status` field — it queries only {active:True} but not {status: {$in: ['active', None]}}. A paused/expired group could still receive auto-assignments. Compare with suggest_groups() which does filter status. Align both.",
+    "Idempotency of auto_assign relies on payment.applied_to_sub_at set inside extend_subscription_from_payment, but the auto-assign call happens BEFORE that flag is written. If auto-assign creates a group and then a subsequent bug throws before the flag write, next paid-flip retriggers assign. Consider setting applied_to_sub_at first (with a rollback), or checking sub.group_id explicitly (already done — acceptable).",
+    "extend_subscription_from_payment's catch-all warning for auto_assign failure hides the traceback. Log logger.exception instead so ops can diagnose group-creation issues.",
+    "Blog SEO description meta duplication in DOM (see design issue) — recommend cleaning static default in index.html."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter15.py", "/app/test_reports/iteration_15.json"],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100% on all requested flows"},
+  "test_credentials": "admin@patungandigital.id / Adm!nPd-JavpOaidEa6wZgFnBS",
+  "seed_data_creation": "Iter15 test creates services 'iter15-{tag}-{RUN}' + users 'iter15xxx_{RUN}@test.com' + auto-created groups. To clean auto-created groups: db.groups.delete_many({auto_created: true}); services can be deleted via /api/admin/services/{id}. Test post 'group-stream-admin' was created and deleted during frontend testing.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter15 fully green backend + frontend. Backend tests at /app/backend/tests/test_iter15.py (run with pytest -o addopts= to disable parallel). New backend endpoints tested: GET /api/sitemap.xml, GET /api/robots.txt, GET /api/admin/groups/unassigned-users?service_id=, plus auto-assign flow triggered via PATCH /api/admin/payments/{id} status=paid. Auto-created groups carry {auto_created: true} and inherit host_slots/regular_slots from service.default_host_slots/default_regular_slots (defaults 1/4 if not set — service model doesn't yet expose default_slots fields to admin UI). Frontend testids that map to iter15: sort-{key} (Users tab), groups-by-service, service-group-block-{sid}, service-collapse-{sid}, add-group-for-{sid}, group-card-{gid}, group-assign-{gid}, promote-/demote-/remove-member-{sub_id}, assign-modal, assign-user, assign-role-regular, assign-role-host, assign-save. One design bug logged: duplicate meta[name=description] due to public/index.html default vs Helmet — fix index.html.",
+  "rca of the issue": "N/A — all functional tests pass. One SEO cosmetic bug identified with clear remediation."
+}

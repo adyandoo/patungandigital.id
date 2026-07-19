@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import api, { rupiah } from "@/lib/api";
 import { UsersThree, Sparkle, ShieldCheck, CurrencyCircleDollar, ArrowRight, Gift, Trophy, Medal, Star, Quotes } from "@phosphor-icons/react";
 import Avatar from "@/components/Avatar";
+import SEO from "@/components/SEO";
 
 const HERO_IMG = "https://images.unsplash.com/photo-1714978444538-9097293e5b20?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwxfHxncm91cCUyMG9mJTIwZnJpZW5kcyUyMHdhdGNoaW5nJTIwdHYlMjBlbmpveWluZ3xlbnwwfHx8fDE3ODQzODA5MDF8MA&ixlib=rb-4.1.0&q=85";
 
@@ -26,6 +27,10 @@ export default function Home() {
 
   return (
     <div data-testid="home-page">
+      <SEO
+        title="Patungan Langganan Digital Premium"
+        description="Bergabung ke patungan legal untuk Netflix, Spotify, YouTube dan layanan premium lainnya. Bayar setengah harga, tetap dapat akses full. Aman, diatur admin."
+      />
       {/* Hero */}
       <section className="px-6 md:px-12 pt-10 md:pt-16 pb-20 noise-grid">
         <div className="grid md:grid-cols-12 gap-8 items-start">

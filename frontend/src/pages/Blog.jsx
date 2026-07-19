@@ -3,6 +3,7 @@ import { Link, useParams, useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import api from "@/lib/api";
+import SEO from "@/components/SEO";
 import { ArrowLeft, Calendar, Tag as TagIcon, User } from "@phosphor-icons/react";
 
 export function BlogList() {
@@ -17,6 +18,10 @@ export function BlogList() {
 
   return (
     <div className="min-h-screen">
+      <SEO
+        title={tag ? `Blog: ${tag}` : "Blog"}
+        description="Tips, ulasan layanan, dan pengumuman terbaru dari tim patungandigital.id — akses konten premium dengan hemat."
+      />
       <section className="border-b-2 border-black bg-[#0A0A0A] text-white px-6 md:px-12 py-20">
         <span className="pd-tag bg-[#FFD60A] text-black">Blog</span>
         <h1 className="mt-6 font-display font-black text-5xl md:text-7xl leading-none">Cerita, tips,<br />& kabar terbaru.</h1>
@@ -87,8 +92,30 @@ export function BlogPost() {
   );
   if (!post) return <div className="p-16 text-center">Memuat...</div>;
 
+  const canonical = typeof window !== "undefined" ? `${window.location.origin}/blog/${post.slug}` : "";
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Article",
+    "headline": post.title,
+    "description": post.excerpt || post.title,
+    "image": post.cover_image_base64 ? undefined : undefined, // avoid base64 in JSON-LD
+    "datePublished": post.published_at,
+    "dateModified": post.updated_at,
+    "author": { "@type": "Person", "name": post.author_name || "Admin" },
+    "publisher": { "@type": "Organization", "name": "patungandigital.id" },
+    "keywords": (post.tags || []).join(", "),
+    "mainEntityOfPage": canonical,
+  };
+
   return (
     <article className="min-h-screen" data-testid="blog-post">
+      <SEO
+        title={post.title}
+        description={post.excerpt || post.title}
+        canonical={canonical}
+        type="article"
+        jsonLd={jsonLd}
+      />
       <div className="border-b-2 border-black bg-[#FFD60A] px-6 md:px-12 py-16">
         <div className="max-w-3xl mx-auto">
           <Link to="/blog" className="inline-flex items-center gap-2 font-mono text-sm underline" data-testid="blog-back-link"><ArrowLeft weight="bold" /> Semua artikel</Link>

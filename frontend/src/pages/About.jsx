@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import api from "@/lib/api";
+import SEO from "@/components/SEO";
 import { EnvelopeSimple, WhatsappLogo, MapPin, ArrowRight } from "@phosphor-icons/react";
 
 export default function About() {
@@ -12,6 +13,11 @@ export default function About() {
 
   return (
     <div className="min-h-screen">
+      <SEO
+        title={data.hero_title || "Tentang Kami"}
+        description={(data.story || "").slice(0, 160).replace(/[#*]/g, "").trim()}
+        canonical={typeof window !== "undefined" ? `${window.location.origin}/about` : ""}
+      />
       {/* Hero */}
       <section className="border-b-2 border-black bg-[#FFD60A] px-6 md:px-12 py-24 relative overflow-hidden" data-testid="about-hero">
         <div className="absolute inset-0 noise-grid opacity-30"></div>

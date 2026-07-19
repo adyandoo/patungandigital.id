@@ -146,6 +146,41 @@ async def suggest_groups(service_id: str, role: str = "regular", admin: dict = D
     return out
 
 
+@router.get("/admin/groups/unassigned-users")
+async def unassigned_users_for_service(service_id: str, admin: dict = Depends(require_admin)):
+    """Return users who have NO active subscription for this service (or have one but no group_id).
+    Useful for group assignment UI so admin sees only relevant candidates."""
+    # Users with active sub for this service already having a group
+    assigned = await db.subscriptions.find({
+        "service_id": service_id,
+        "status": "active",
+        "group_id": {"$ne": None, "$exists": True},
+    }).to_list(None)
+    assigned_user_ids = {s["user_id"] for s in assigned if s.get("user_id")}
+    # All non-admin users
+    users = await db.users.find({"role": {"$ne": "admin"}}).to_list(None)
+    out = []
+    for u in users:
+        uid = str(u["_id"])
+        if uid in assigned_user_ids:
+            continue
+        # Check if user has ANY active sub for this service without a group
+        pending_sub = await db.subscriptions.find_one({
+            "user_id": uid,
+            "service_id": service_id,
+            "status": "active",
+        })
+        out.append({
+            "id": uid,
+            "name": u.get("name", ""),
+            "email": u.get("email", ""),
+            "has_pending_sub": bool(pending_sub),
+            "pending_sub_id": str(pending_sub["_id"]) if pending_sub else None,
+            "pending_role": pending_sub.get("role") if pending_sub else None,
+        })
+    return out
+
+
 # ---------------- Public: Service availability ---------------- #
 @router.get("/public/availability")
 async def services_availability():

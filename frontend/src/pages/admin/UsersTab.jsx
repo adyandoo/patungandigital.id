@@ -3,6 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { PlusCircle, Trash, PencilSimple, DownloadSimple, X, ShieldStar, UploadSimple, FileText, Key } from "@phosphor-icons/react";
 import { Modal, F, SearchInput } from "./shared";
+import { useSortableTable } from "@/lib/useSortableTable";
 
 export default function UsersTab() {
   const [users, setUsers] = useState([]);
@@ -23,6 +24,10 @@ export default function UsersTab() {
       [u.name, u.email, u.username, u.whatsapp, u.role, u.referral_code].some((v) => String(v || "").toLowerCase().includes(needle))
     );
   }, [users, q]);
+
+  const { sorted, HeaderButton } = useSortableTable(filtered, null, "asc", {
+    "referral_credit": (r) => r.referral_credit || 0,
+  });
 
   const del = async (id) => {
     if (!window.confirm("Hapus user ini?")) return;
@@ -96,11 +101,18 @@ export default function UsersTab() {
           <thead className="bg-black text-white">
             <tr>
               <th className="px-3 py-3"><input type="checkbox" checked={allSelected} onChange={toggleAll} data-testid="users-select-all" /></th>
-              {["Nama", "Email", "Username", "WhatsApp", "Kode Ref", "Kredit", "Role", "Aksi"].map((h) => <th key={h} className="text-left px-4 py-3 font-mono uppercase text-xs">{h}</th>)}
+              <th className="text-left px-4 py-3"><HeaderButton k="name" label="Nama" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="email" label="Email" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="username" label="Username" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="whatsapp" label="WhatsApp" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="referral_code" label="Kode Ref" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="referral_credit" label="Kredit" /></th>
+              <th className="text-left px-4 py-3"><HeaderButton k="role" label="Role" /></th>
+              <th className="text-left px-4 py-3 font-mono uppercase text-xs">Aksi</th>
             </tr>
           </thead>
           <tbody data-testid="users-table">
-            {filtered.map((u) => (
+            {sorted.map((u) => (
               <tr key={u.id} className="border-t-2 border-black" data-testid={`user-row-${u.id}`}>
                 <td className="px-3 py-3">
                   {u.role !== "admin" && (

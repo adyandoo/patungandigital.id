@@ -247,6 +247,60 @@ async def apply_referral_rewards_if_first_paid(payment_id: str):
     await maybe_grant_tier_rewards(str(referrer["_id"]))
 
 
+async def auto_assign_group_for_sub(sub_id: str) -> Optional[str]:
+    """When a payment goes paid and the sub isn't in a group yet, place it in the first
+    group of its service that has an open slot for the sub's role.
+    If all groups are full, auto-create a new group inheriting capacity from the service.
+    Returns the group_id chosen or None if impossible."""
+    if not ObjectId.is_valid(sub_id):
+        return None
+    sub = await db.subscriptions.find_one({"_id": ObjectId(sub_id)})
+    if not sub or sub.get("group_id"):
+        return sub.get("group_id") if sub else None
+    service_id = sub.get("service_id")
+    role = sub.get("role", "regular")
+    if not service_id:
+        return None
+    # Find first group with open slot for this role
+    groups = await db.groups.find({"service_id": service_id, "active": True}).sort("created_at", 1).to_list(None)
+    chosen = None
+    for g in groups:
+        gid = str(g["_id"])
+        subs = await db.subscriptions.find({"group_id": gid, "status": "active"}).to_list(None)
+        filled = sum(1 for x in subs if x.get("role") == role)
+        capacity = g["host_slots"] if role == "host" else g["regular_slots"]
+        if filled < capacity:
+            chosen = gid
+            break
+    if not chosen:
+        # Auto-create a new group inheriting service defaults
+        svc = await db.services.find_one({"_id": ObjectId(service_id)})
+        if not svc:
+            return None
+        idx = await db.groups.count_documents({"service_id": service_id}) + 1
+        new_group = {
+            "service_id": service_id,
+            "name": f"{svc.get('name', 'Group')} — Grup {idx}",
+            "host_slots": int(svc.get("default_host_slots", 1) or 1),
+            "regular_slots": int(svc.get("default_regular_slots", 4) or 4),
+            "active": True,
+            "status": "active",
+            "auto_created": True,
+            "created_at": now_utc().isoformat(),
+        }
+        r = await db.groups.insert_one(new_group)
+        chosen = str(r.inserted_id)
+        await log_admin_action(None, "auto_create_group", f"group:{chosen}",
+                               {"service_id": service_id, "reason": "no_slot_available"})
+    await db.subscriptions.update_one(
+        {"_id": ObjectId(sub_id)},
+        {"$set": {"group_id": chosen}},
+    )
+    await log_admin_action(None, "auto_assign_group", f"subscription:{sub_id}",
+                           {"group_id": chosen, "role": role})
+    return chosen
+
+
 async def extend_subscription_from_payment(payment_id: str):
     """When a payment transitions to 'paid', extend the subscription's active period.
     - start_date = first_paid_at (only set once)
@@ -288,6 +342,12 @@ async def extend_subscription_from_payment(payment_id: str):
             "status": "active" if sub.get("status") != "active" else sub.get("status"),
         }},
     )
+    # Auto-assign to group if user has no group yet
+    if not sub.get("group_id"):
+        try:
+            await auto_assign_group_for_sub(str(sub["_id"]))
+        except Exception as e:
+            logger.warning(f"auto-assign group failed: {e}")
     await db.payments.update_one(
         {"_id": ObjectId(payment_id)},
         {"$set": {"applied_to_sub_at": now.isoformat(), "duration_applied": duration}},
@@ -1266,6 +1326,19 @@ async def admin_create_sub(input: SubscriptionInput, admin: dict = Depends(requi
 @api.patch("/admin/subscriptions/{sub_id}")
 async def admin_update_sub(sub_id: str, input: SubscriptionUpdate, admin: dict = Depends(require_admin)):
     updates = {k: v for k, v in input.model_dump().items() if v is not None}
+    # Validation: if promoting to host, ensure no existing host in target group
+    if updates.get("role") == "host":
+        current = await db.subscriptions.find_one({"_id": ObjectId(sub_id)})
+        target_group = updates.get("group_id") or (current or {}).get("group_id")
+        if target_group:
+            existing_host = await db.subscriptions.find_one({
+                "group_id": target_group,
+                "role": "host",
+                "status": "active",
+                "_id": {"$ne": ObjectId(sub_id)},
+            })
+            if existing_host:
+                raise HTTPException(400, "Grup ini sudah punya host. Hapus/turunkan host lama dulu sebelum mempromosikan user baru.")
     if "start_date" in updates and isinstance(updates["start_date"], datetime):
         updates["start_date"] = updates["start_date"].isoformat()
     if "end_date" in updates and isinstance(updates["end_date"], datetime):

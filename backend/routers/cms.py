@@ -1,11 +1,13 @@
-"""CMS router: About page, Blog posts, Announcements."""
+"""CMS router: About page, Blog posts, Announcements, SEO."""
 import re
 import unicodedata
+import os
 from datetime import datetime, timezone
 from typing import Optional, List
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import PlainTextResponse, Response
 
 from server import (
     db, now_utc, log_admin_action, get_current_user, require_admin,
@@ -13,6 +15,51 @@ from server import (
 )
 
 router = APIRouter()
+
+
+# ---------------- SEO: sitemap.xml + robots.txt ---------------- #
+@router.get("/sitemap.xml")
+async def sitemap_xml():
+    """Dynamic sitemap listing homepage, /about, /blog, and each published blog post."""
+    base = os.environ.get("FRONTEND_URL", "").rstrip("/")
+    now_iso = now_utc().strftime("%Y-%m-%d")
+    urls = [
+        {"loc": f"{base}/", "changefreq": "weekly", "priority": "1.0", "lastmod": now_iso},
+        {"loc": f"{base}/about", "changefreq": "monthly", "priority": "0.8", "lastmod": now_iso},
+        {"loc": f"{base}/blog", "changefreq": "daily", "priority": "0.9", "lastmod": now_iso},
+    ]
+    posts = await db.blog_posts.find({"published": True}, {"slug": 1, "updated_at": 1, "published_at": 1}).to_list(None)
+    for p in posts:
+        lastmod = p.get("updated_at") or p.get("published_at") or now_iso
+        if isinstance(lastmod, str) and "T" in lastmod:
+            lastmod = lastmod.split("T")[0]
+        urls.append({
+            "loc": f"{base}/blog/{p['slug']}",
+            "changefreq": "monthly",
+            "priority": "0.7",
+            "lastmod": lastmod,
+        })
+    xml_items = "\n".join(
+        f"  <url><loc>{u['loc']}</loc><lastmod>{u['lastmod']}</lastmod>"
+        f"<changefreq>{u['changefreq']}</changefreq><priority>{u['priority']}</priority></url>"
+        for u in urls
+    )
+    xml = f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n{xml_items}\n</urlset>'
+    return Response(content=xml, media_type="application/xml")
+
+
+@router.get("/robots.txt", response_class=PlainTextResponse)
+async def robots_txt():
+    base = os.environ.get("FRONTEND_URL", "").rstrip("/")
+    return f"""User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /dashboard
+Disallow: /reset-password
+Disallow: /auth-callback
+
+Sitemap: {base}/api/sitemap.xml
+"""
 
 
 def slugify(text: str) -> str:
