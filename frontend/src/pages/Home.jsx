@@ -170,9 +170,9 @@ export default function Home() {
               dapat kredit Rp 10.000 yang langsung dipotong dari tagihan berikutnya.
             </p>
             <div className="mt-6 grid grid-cols-3 gap-3 max-w-lg">
-              <TierChip n="5" reward="1 bulan gratis" />
-              <TierChip n="10" reward="3 bulan gratis" />
-              <TierChip n="25" reward="8 bulan gratis" />
+              <TierChip n="10" reward="1 bulan gratis" />
+              <TierChip n="15" reward="2 bulan gratis" />
+              <TierChip n="45" reward="5 bulan gratis" />
             </div>
             <Link to="/register" className="brutal-btn brutal-btn-red mt-8" data-testid="referral-banner-cta">
               Mulai gabung <ArrowRight weight="bold" />

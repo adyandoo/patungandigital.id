@@ -1,0 +1,32 @@
+{
+  "summary": "Iter19 backend tests: 15/15 PASS (sequential). Covered P0 annual bonus 12-month (amount=price*11, original=price*12, bonus_month_applied, DB billable_months=11, annual_bonus_applied on both sub+payment), P0 non-12 no-bonus for [1,3,6] with billable_months=duration_months and original_amount=amount, P1 FRONTEND_URL is https and not localhost, P3a referral tiers exactly [(1,10,1),(2,15,2),(3,45,5)] and next_tier=tier1 for fresh user, P3b TTL indexes on email_verifications.expires_at and password_resets.expires_at with expireAfterSeconds=86400, plus Iter18 regressions (idempotent verify-email, admin manual verify, basic join, duplicate join blocked, invalid service 404, onboarding first_payment label + done-after-join).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/register", "issue": "Pre-existing race condition: users.referral_code unique+sparse index fails with DuplicateKeyError on concurrent inserts because sparse ignores MISSING fields but users are inserted with an explicit referral_code:null (server.py ~line 1156). Under xdist parallel run (2 workers) two concurrent registrations returned 500 with pymongo DuplicateKeyError on referral_code_1 (null,null). Fix: either (a) do not set referral_code:null on insert (omit the field so sparse skips it), or (b) use a partialFilterExpression: {referral_code: {$type: 'string'}} instead of sparse=True. All tests pass in sequential mode."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter19.py",
+    "/app/test_reports/pytest/iter19_results.xml"
+  ],
+  "action_items": [
+    "Optional (minor): Fix users.referral_code index to tolerate concurrent registrations. Use partialFilterExpression on {referral_code: {$type: 'string'}} OR omit the field entirely on insert instead of setting it to null. Currently manifests only under concurrent registration (test parallelism) — acceptable for now.",
+    "No P0/P1 issues found for Iter19 features. Manual curl values confirmed programmatically: Netflix 12-mo = 495000 (amount) vs 540000 (original)."
+  ],
+  "critical_code_review_comments": [
+    "server.py:862 create_index(referral_code, unique=True, sparse=True): sparse behaves as expected only if the field is missing; the register handler inserts referral_code:None explicitly (server.py:1156), causing duplicate-null collisions on concurrent inserts. Use partialFilterExpression instead.",
+    "server.py user_join_subscription: correctly computes billable_months=11 when duration_months==12, persists annual_bonus_applied on both subscription and payment docs. Clean implementation.",
+    "TIER_THRESHOLDS updated to 10/15/45 → 1/2/5 as specified. routers/referral.py returns tiers array + next_tier as smallest ungranted tier. Correct.",
+    "TTL indexes (email_verifications.expires_at, password_resets.expires_at) created with expireAfterSeconds=86400 during startup. Verified via index_information()."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter19.py"],
+  "success_rate": {"backend": "100% (15/15 sequential; 13/15 under -n auto due to unrelated race)", "frontend": "not tested (per request)"},
+  "test_credentials": "Admin admin@patungandigital.id / Adm!nPd-JavpOaidEa6wZgFnBS (from /app/memory/test_credentials.md).",
+  "seed_data_creation": "Created TEST_iter19_* users via /auth/register and admin-verified them for join flows. No manual DB seeds.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run test_iter19.py sequentially to avoid the referral_code null race (add '-p no:xdist -o addopts=\"\"' to override the default parallel xdist config in /app/backend/pytest.ini). Iter19 introduced 3 features (annual bonus, TTL indexes, tier thresholds 10/15/45) plus FRONTEND_URL env fix — all verified against DB and API. Frontend JoinModal promo UI was excluded per request.",
+  "rca of the issue": "The 2 intermittent 500s during parallel test execution trace to pymongo DuplicateKeyError on users.referral_code_1 index because two workers registered users at the same instant, both inserting referral_code:null. The sparse=True flag skips only missing fields, not null values. Reproducible: run pytest with default xdist (-n auto). Mitigation options: (1) omit referral_code from the initial insert doc (server.py:1156) so sparse takes effect; (2) drop existing index and recreate with partialFilterExpression={referral_code:{$type:'string'}}. Not blocking for Iter19 delivery."
+}

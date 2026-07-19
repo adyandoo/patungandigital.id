@@ -154,9 +154,9 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
 
 # ---------------- Referral helpers ---------------- #
 TIER_THRESHOLDS = [
-    {"tier": 1, "referrals": 5, "free_months": 1, "label": "Tier 1"},
-    {"tier": 2, "referrals": 10, "free_months": 2, "label": "Tier 2"},   # cumulative 3 free months
-    {"tier": 3, "referrals": 25, "free_months": 5, "label": "Tier 3"},   # cumulative 8 free months
+    {"tier": 1, "referrals": 10, "free_months": 1, "label": "Tier 1"},
+    {"tier": 2, "referrals": 15, "free_months": 2, "label": "Tier 2"},   # cumulative 3 free months
+    {"tier": 3, "referrals": 45, "free_months": 5, "label": "Tier 3"},   # cumulative 8 free months
 ]
 
 
@@ -861,6 +861,16 @@ async def lifespan(app: FastAPI):
             pass
     await db.users.create_index("referral_code", unique=True, sparse=True)
     await db.referral_rewards.create_index("referrer_id")
+    # TTL index: auto-delete expired verification tokens 24h after expiry.
+    # `expireAfterSeconds=86400` = document is deleted 1 day AFTER the `expires_at` datetime.
+    try:
+        await db.email_verifications.create_index("expires_at", expireAfterSeconds=86400)
+    except Exception as e:
+        logger.warning(f"Could not create TTL index on email_verifications.expires_at: {e}")
+    try:
+        await db.password_resets.create_index("expires_at", expireAfterSeconds=86400)
+    except Exception as e:
+        logger.warning(f"Could not create TTL index on password_resets.expires_at: {e}")
     # Seed admin (never force-reset password so admin can change it after login)
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@patungandigital.id")
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
@@ -1400,7 +1410,11 @@ async def user_join_subscription(input: JoinInput, user: dict = Depends(get_curr
     if existing:
         raise HTTPException(400, "Kamu sudah punya langganan aktif/pending untuk layanan ini. Lihat di tab Langganan / Pembayaran.")
     price_per_month = int(svc.get("price_regular", 0) or 0)
-    total = price_per_month * int(input.duration_months)
+    # P0: 12-month annual bonus — pay 11 months, get 12 months of duration
+    is_annual_bonus = (int(input.duration_months) == 12)
+    billable_months = 11 if is_annual_bonus else int(input.duration_months)
+    total = price_per_month * billable_months
+    original_total = price_per_month * int(input.duration_months)
     now = now_utc()
     sub_doc = {
         "user_id": user["id"],
@@ -1412,9 +1426,10 @@ async def user_join_subscription(input: JoinInput, user: dict = Depends(get_curr
         "end_date": None,
         "price": price_per_month,
         "status": "pending",
-        "duration_months": int(input.duration_months),
+        "duration_months": int(input.duration_months),  # user still gets 12 months of access
         "created_at": now.isoformat(),
         "self_join": True,
+        "annual_bonus_applied": is_annual_bonus,
     }
     sub_res = await db.subscriptions.insert_one(sub_doc)
     sub_id = str(sub_res.inserted_id)
@@ -1426,6 +1441,7 @@ async def user_join_subscription(input: JoinInput, user: dict = Depends(get_curr
         "subscription_id": sub_id,
         "amount": total,
         "base_amount": total,
+        "original_amount": original_total,  # for showing discount
         "period_label": period_label,
         "due_date": (now + timedelta(days=due_days)).isoformat(),
         "status": "pending",
@@ -1433,13 +1449,15 @@ async def user_join_subscription(input: JoinInput, user: dict = Depends(get_curr
         "receipt": None,
         "payment_method": None,
         "duration_months": int(input.duration_months),
+        "billable_months": billable_months,
         "self_join": True,
+        "annual_bonus_applied": is_annual_bonus,
     }
     pay_res = await db.payments.insert_one(pay_doc)
     pay_doc["id"] = str(pay_res.inserted_id)
     pay_doc.pop("_id", None)
-    await log_admin_action(None, "user_join", f"subscription:{sub_id}", {"user_id": user["id"], "service": svc.get("name"), "duration": input.duration_months})
-    return {"ok": True, "subscription_id": sub_id, "payment": pay_doc, "amount": total, "service_name": svc.get("name")}
+    await log_admin_action(None, "user_join", f"subscription:{sub_id}", {"user_id": user["id"], "service": svc.get("name"), "duration": input.duration_months, "annual_bonus": is_annual_bonus})
+    return {"ok": True, "subscription_id": sub_id, "payment": pay_doc, "amount": total, "original_amount": original_total, "bonus_month_applied": is_annual_bonus, "service_name": svc.get("name")}
 
 
 @api.post("/me/subscriptions/{sub_id}/renew")

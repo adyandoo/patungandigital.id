@@ -1016,7 +1016,11 @@ function JoinModal({ onClose, onJoined }) {
   }, [pickedService]);
 
   const durations = [1, 3, 6, 12];
-  const price = pickedService ? (pickedService.price_regular || 0) * duration : 0;
+  const originalPrice = pickedService ? (pickedService.price_regular || 0) * duration : 0;
+  const isAnnualBonus = duration === 12;
+  const billableMonths = isAnnualBonus ? 11 : duration;
+  const finalPrice = pickedService ? (pickedService.price_regular || 0) * billableMonths : 0;
+  const savings = originalPrice - finalPrice;
 
   const submit = async () => {
     if (!pickedService) return toast.error("Pilih layanan dulu.");
@@ -1083,19 +1087,30 @@ function JoinModal({ onClose, onJoined }) {
               {pickedService && (
                 <div>
                   <div className="font-display font-bold text-lg mb-3">2. Durasi</div>
+                  <div className="brutal-sm bg-gradient-to-r from-[#FF3B30] to-[#FF9500] text-white p-3 mb-3 flex items-center gap-3" data-testid="join-annual-bonus-banner">
+                    <Sparkle weight="fill" size={22} className="flex-shrink-0" />
+                    <div className="text-sm">
+                      <div className="font-display font-black">Promo Tahunan: Bayar 11, Dapat 12!</div>
+                      <div className="opacity-95 text-xs mt-0.5">Pilih durasi <b>12 bulan</b> — otomatis dapat 1 bulan GRATIS.</div>
+                    </div>
+                  </div>
                   <div className="grid grid-cols-4 gap-2" data-testid="join-durations">
                     {durations.map((m) => {
                       const disabled = m < (pickedService.min_duration_months || 1);
                       const active = duration === m;
+                      const bonus = m === 12;
                       return (
                         <button
                           key={m}
                           disabled={disabled}
                           onClick={() => setDuration(m)}
-                          className={`brutal-sm py-3 font-display font-black text-lg ${disabled ? "bg-gray-100 text-gray-400 cursor-not-allowed" : active ? "bg-[#FF3B30] text-white" : "bg-white"}`}
+                          className={`brutal-sm py-3 font-display font-black text-lg relative ${disabled ? "bg-gray-100 text-gray-400 cursor-not-allowed" : active ? "bg-[#FF3B30] text-white" : "bg-white"}`}
                           data-testid={`join-duration-${m}`}
                         >
                           {m} bln
+                          {bonus && !disabled && (
+                            <span className="absolute -top-2 -right-2 bg-[#FFD60A] border-2 border-black text-black text-[9px] font-mono uppercase px-1.5 py-0.5 leading-none" data-testid="join-bonus-badge">HEMAT</span>
+                          )}
                         </button>
                       );
                     })}
@@ -1106,9 +1121,22 @@ function JoinModal({ onClose, onJoined }) {
               {pickedService && (
                 <div className="brutal-sm bg-[#FFD60A]/40 p-4" data-testid="join-summary">
                   <div className="font-mono text-xs uppercase text-gray-700">Total (akan jadi tagihan pending)</div>
-                  <div className="font-display font-black text-3xl mt-1">{rupiah(price)}</div>
+                  {isAnnualBonus && savings > 0 ? (
+                    <div className="mt-1 flex items-baseline gap-3 flex-wrap">
+                      <div className="font-display font-black text-3xl text-[#FF3B30]" data-testid="join-final-price">{rupiah(finalPrice)}</div>
+                      <div className="font-mono text-sm text-gray-500 line-through" data-testid="join-original-price">{rupiah(originalPrice)}</div>
+                      <span className="brutal-sm bg-[#34C759] text-white px-2 py-0.5 text-xs font-mono uppercase" data-testid="join-savings-tag">
+                        Hemat {rupiah(savings)} · 1 bulan gratis
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="font-display font-black text-3xl mt-1" data-testid="join-final-price">{rupiah(finalPrice)}</div>
+                  )}
                   <div className="text-xs text-gray-700 mt-2">
-                    Setelah konfirmasi, kamu diarahkan ke tab <b>Pembayaran</b> untuk pilih metode (QRIS manual atau Midtrans otomatis). Admin akan assign kamu ke grup setelah pembayaran diverifikasi.
+                    {isAnnualBonus
+                      ? <>Kamu bayar untuk <b>11 bulan</b> tapi dapat akses <b>12 bulan penuh</b>. Setelah bayar, admin akan assign kamu ke grup.</>
+                      : <>Setelah konfirmasi, kamu diarahkan ke tab <b>Pembayaran</b> untuk pilih metode (QRIS manual atau Midtrans otomatis). Admin akan assign kamu ke grup setelah pembayaran diverifikasi.</>
+                    }
                   </div>
                 </div>
               )}

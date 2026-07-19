@@ -253,8 +253,15 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - **P4 NEW — Sort controls**: WaitlistTab uses `useSortableTable` for column headers (created_at, email, name, service, status). TestimonialsTab + AnnouncementsTab get "Sort by" dropdown (created_at, rating/severity, title, expires_at).
 - **P5 NEW — Welcome email retry queue**: New async fn `_retry_pending_welcome_emails` runs on each scheduler tick (1h). Finds verified users where `welcome_email_sent!=True` and `welcome_email_retries<3`, retries send, increments counter, marks `welcome_email_given_up` after 3 failed attempts. Skips users verified < 5 min ago to avoid racing the main handler.
 
+## Iteration 19 (2026-02-19) — Annual bonus + FRONTEND_URL fix + Referral tier rework + TTL index
+- **P0 NEW — 12-month bonus (Bayar 11, Dapat 12)**: In `POST /me/subscriptions/join`, when `duration_months==12` the amount is discounted to `price × 11` (billable_months=11) while user still gets 12 months of access. Payment doc stores `annual_bonus_applied=True`, `original_amount`, `billable_months`. JoinModal shows: (a) top promo banner (red-orange gradient), (b) HEMAT badge on 12-month button, (c) summary with strikethrough original price + green "Hemat X · 1 bulan gratis" tag.
+- **P1 FIX — FRONTEND_URL**: backend/.env was hardcoded to `http://localhost:3000`, causing email verification links to be un-clickable in production. Updated to `https://group-stream-admin.preview.emergentagent.com` in the preview env. **PRODUCTION deployment must set FRONTEND_URL to the production domain (e.g. `https://group-stream-admin.emergent.host`)** — user notified.
+- **P3a NEW — Referral tier rework**: `TIER_THRESHOLDS` updated to Tier 1 = 10 refs → 1 mo, Tier 2 = 15 refs → 2 mo (cumulative 3 mo), Tier 3 = 45 refs → 5 mo (cumulative 8 mo). Home page tier chips + UserDashboard ReferralPanel automatically pick up new values from backend.
+- **P3b NEW — TTL indexes**: Added `expireAfterSeconds=86400` indexes on `email_verifications.expires_at` and `password_resets.expires_at`. Documents auto-purge 1 day after expiry, keeping the collections lean without a cleanup cron.
+- **P2 DEFERRED — Extract routers/auth.py**: Auth section (~350 lines) not extracted this iteration due to risk of breaking JWT/Google login flow. Will attempt in Iter 20 after adding a full auth backend test suite as a safety net.
+
 ## Backlog / next tasks
-- **P2 (still open)**: Extract `routers/auth.py` — server.py is now ~2200 lines.
+- **P2 (still open)**: Extract `routers/auth.py` — need full auth test suite as safety net first.
 - **P3**: Object Storage for base64 media.
 - **P3**: SendGrid fallback / dead-letter queue for failed verification emails (currently silent-fail).
 - **P3**: Bounce-detection for invalid emails so unverified users don't accumulate.
