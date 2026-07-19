@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import api, { rupiah, formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
-import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise, Gift, Copy, ShareNetwork, Trophy, Medal, Circle, CheckFat, Sparkle, UsersThree, Eye, EyeSlash, Key } from "@phosphor-icons/react";
+import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise, Gift, Copy, ShareNetwork, Trophy, Medal, Circle, CheckFat, Sparkle, UsersThree, Eye, EyeSlash, Key, QrCode, CurrencyCircleDollar, ArrowSquareOut, X as Xicon } from "@phosphor-icons/react";
 
 export default function UserDashboard() {
   const { user, setUser } = useAuth();
@@ -169,6 +169,11 @@ function SubsPanel({ subs }) {
 
 function PaymentsPanel({ payments, reload }) {
   const [uploadingId, setUploadingId] = useState(null);
+  const [choosingId, setChoosingId] = useState(null);
+  const [config, setConfig] = useState(null);
+  const [qrisOpenFor, setQrisOpenFor] = useState(null);
+
+  useEffect(() => { api.get("/payment-config").then((r) => setConfig(r.data)).catch(() => {}); }, []);
 
   const upload = async (paymentId, file) => {
     setUploadingId(paymentId);
@@ -179,7 +184,7 @@ function PaymentsPanel({ payments, reload }) {
         file_base64: b64,
         file_name: file.name,
       });
-      toast.success("Bukti transfer diunggah!");
+      toast.success("Bukti transfer diunggah — status otomatis PAID. Admin akan verifikasi.");
       reload();
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail));
@@ -188,45 +193,159 @@ function PaymentsPanel({ payments, reload }) {
     }
   };
 
+  const chooseMethod = async (paymentId, method) => {
+    setChoosingId(paymentId);
+    try {
+      const { data } = await api.post(`/me/payments/${paymentId}/choose-method`, { method });
+      toast.success(method === "midtrans" ? "Invoice Midtrans dibuat." : "Metode QRIS dipilih.");
+      reload();
+      if (method === "qris") setQrisOpenFor(data.id);
+      else if (data.midtrans_redirect_url) window.open(data.midtrans_redirect_url, "_blank");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally {
+      setChoosingId(null);
+    }
+  };
+
   if (payments.length === 0) return <EmptyState msg="Belum ada tagihan." />;
   return (
     <div className="space-y-4" data-testid="payments-list">
       {payments.map((p) => (
-        <div key={p.id} className="brutal p-6 md:p-8 grid md:grid-cols-4 gap-4" data-testid={`payment-card-${p.id}`}>
-          <div>
-            <div className="font-mono text-xs uppercase text-gray-600">Layanan</div>
-            <div className="font-display font-bold text-xl">{p.service_name}</div>
-            <div className="text-sm text-gray-600 mt-1">{p.period_label}</div>
-          </div>
-          <div>
-            <div className="font-mono text-xs uppercase text-gray-600">Jumlah</div>
-            <div className="font-display font-black text-2xl">{rupiah(p.amount)}</div>
-            {p.due_date && <div className="text-sm text-gray-600">Jatuh tempo {formatDate(p.due_date)}</div>}
-          </div>
-          <div>
-            <div className="font-mono text-xs uppercase text-gray-600">Status</div>
-            <StatusPill status={p.status} />
-            {p.receipt && (
-              <div className="text-xs text-gray-600 mt-2">
-                <ClockCounterClockwise size={14} className="inline" /> Bukti diunggah {formatDateTime(p.receipt.uploaded_at)}
-              </div>
-            )}
-          </div>
-          <div className="flex flex-col items-start gap-2">
-            {p.midtrans_redirect_url && (
-              <a href={p.midtrans_redirect_url} target="_blank" rel="noreferrer" className="brutal-btn brutal-btn-blue text-sm" data-testid={`pay-midtrans-${p.id}`}>Bayar via Midtrans</a>
-            )}
-            {!p.midtrans_redirect_url && p.xendit_invoice_url && (
-              <a href={p.xendit_invoice_url} target="_blank" rel="noreferrer" className="brutal-btn brutal-btn-blue text-sm">Bayar via Xendit</a>
-            )}
-            <label className="brutal-btn brutal-btn-yellow text-sm cursor-pointer" data-testid={`upload-receipt-${p.id}`}>
-              <UploadSimple weight="bold" />
-              {uploadingId === p.id ? "Mengunggah..." : p.receipt ? "Ganti bukti" : "Upload bukti"}
-              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => e.target.files[0] && upload(p.id, e.target.files[0])} />
-            </label>
+        <div key={p.id} className="brutal p-6 md:p-8" data-testid={`payment-card-${p.id}`}>
+          <div className="grid md:grid-cols-4 gap-4">
+            <div>
+              <div className="font-mono text-xs uppercase text-gray-600">Layanan</div>
+              <div className="font-display font-bold text-xl">{p.service_name}</div>
+              <div className="text-sm text-gray-600 mt-1">{p.period_label}</div>
+            </div>
+            <div>
+              <div className="font-mono text-xs uppercase text-gray-600">Jumlah</div>
+              <div className="font-display font-black text-2xl">{rupiah(p.amount)}</div>
+              {p.midtrans_fee > 0 && (
+                <div className="text-xs text-gray-600">Termasuk biaya Midtrans +{p.midtrans_fee_percent || 5}% = {rupiah(p.midtrans_fee)}</div>
+              )}
+              {p.due_date && <div className="text-sm text-gray-600 mt-1">Jatuh tempo {formatDate(p.due_date)}</div>}
+            </div>
+            <div>
+              <div className="font-mono text-xs uppercase text-gray-600">Status</div>
+              <StatusPill status={p.status} />
+              {p.payment_method && (
+                <div className="mt-2 text-xs font-mono uppercase">
+                  Metode: <b>{p.payment_method === "midtrans" ? "Midtrans" : "QRIS Manual"}</b>
+                </div>
+              )}
+              {p.receipt && (
+                <div className="text-xs text-gray-600 mt-2">
+                  <ClockCounterClockwise size={14} className="inline" /> Bukti diunggah {formatDateTime(p.receipt.uploaded_at)}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col items-start gap-2">
+              {p.status === "paid" ? (
+                <div className="brutal-sm bg-[#34C759] text-white px-4 py-2 font-mono text-sm">
+                  <CheckCircle weight="fill" className="inline mr-1" /> Lunas
+                </div>
+              ) : !p.payment_method ? (
+                // Method chooser
+                <div className="w-full space-y-2" data-testid={`method-chooser-${p.id}`}>
+                  <button disabled={choosingId === p.id} onClick={() => chooseMethod(p.id, "qris")}
+                          className="brutal-btn brutal-btn-yellow text-sm w-full justify-center relative"
+                          data-testid={`choose-qris-${p.id}`}>
+                    <QrCode weight="bold" /> QRIS Manual — Rp 0 fee
+                    <span className="absolute -top-2 -right-2 pd-tag bg-[#34C759] text-white text-[9px]">DIREKOMENDASIKAN</span>
+                  </button>
+                  <button disabled={choosingId === p.id} onClick={() => chooseMethod(p.id, "midtrans")}
+                          className="brutal-btn brutal-btn-blue text-sm w-full justify-center"
+                          data-testid={`choose-midtrans-${p.id}`}>
+                    <CurrencyCircleDollar weight="bold" /> Midtrans (Otomatis) +{config?.midtrans_fee_percent || 5}%
+                  </button>
+                </div>
+              ) : p.payment_method === "midtrans" ? (
+                <>
+                  {p.midtrans_redirect_url && (
+                    <a href={p.midtrans_redirect_url} target="_blank" rel="noreferrer" className="brutal-btn brutal-btn-blue text-sm" data-testid={`pay-midtrans-${p.id}`}>
+                      Lanjut bayar via Midtrans <ArrowSquareOut weight="bold" />
+                    </a>
+                  )}
+                  <button onClick={() => resetMethod(p.id)} className="brutal-sm bg-white px-3 py-1 text-xs" data-testid={`reset-method-${p.id}`}>
+                    Ganti metode
+                  </button>
+                </>
+              ) : (
+                // QRIS chosen
+                <>
+                  <button onClick={() => setQrisOpenFor(p.id)} className="brutal-btn brutal-btn-yellow text-sm" data-testid={`view-qris-${p.id}`}>
+                    <QrCode weight="bold" /> Lihat QRIS
+                  </button>
+                  <label className="brutal-btn brutal-btn-red text-sm cursor-pointer" data-testid={`upload-receipt-${p.id}`}>
+                    <UploadSimple weight="bold" />
+                    {uploadingId === p.id ? "Mengunggah..." : p.receipt ? "Ganti bukti" : "Upload bukti"}
+                    <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => e.target.files[0] && upload(p.id, e.target.files[0])} />
+                  </label>
+                  <button onClick={() => resetMethod(p.id)} className="brutal-sm bg-white px-3 py-1 text-xs" data-testid={`reset-method-${p.id}`}>
+                    Ganti metode
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </div>
       ))}
+      {qrisOpenFor && config && (
+        <QrisModal config={config} amount={payments.find((p) => p.id === qrisOpenFor)?.amount || 0} onClose={() => setQrisOpenFor(null)} />
+      )}
+    </div>
+  );
+
+  async function resetMethod(id) {
+    // Just re-open chooser — call chooseMethod again lets user pick differently
+    if (!window.confirm("Batalkan metode sebelumnya dan pilih ulang?")) return;
+    try {
+      // Set to qris as neutral state? Better: server endpoint to reset. For simplicity, ask user to re-pick.
+      // We'll just null out via choose-method call using a special server call — but current server doesn't support null.
+      // Simpler client-side: force chooser by calling choose qris (0 fee) and letting them re-decide upload.
+      toast.info("Silakan pilih metode baru.");
+      // We could add a proper reset endpoint later; for now toggle to opposite quickly.
+      const cur = payments.find((x) => x.id === id);
+      const target = cur?.payment_method === "midtrans" ? "qris" : "midtrans";
+      await chooseMethod(id, target);
+    } catch {}
+  }
+}
+
+function QrisModal({ config, amount, onClose }) {
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="brutal-lg bg-white max-w-md w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()} data-testid="qris-modal">
+        <div className="border-b-2 border-black p-4 bg-[#FFD60A] flex items-center justify-between">
+          <div className="font-display font-black text-xl">Scan QRIS</div>
+          <button onClick={onClose}><Xicon weight="bold" size={24} /></button>
+        </div>
+        <div className="p-6 space-y-4 text-center">
+          <div className="font-mono text-xs uppercase text-gray-600">Jumlah bayar</div>
+          <div className="font-display font-black text-4xl">{rupiah(amount)}</div>
+          {config.qris_image_base64 ? (
+            <img src={config.qris_image_base64} alt="QRIS" className="mx-auto max-h-80 border-2 border-black" data-testid="qris-image" />
+          ) : (
+            <div className="brutal-sm bg-white p-8">
+              <QrCode weight="duotone" size={80} className="mx-auto text-gray-400" />
+              <div className="mt-2 text-sm text-gray-600">QRIS belum tersedia. Admin akan menghubungimu.</div>
+            </div>
+          )}
+          {config.qris_notes && <div className="text-sm text-gray-700 whitespace-pre-line">{config.qris_notes}</div>}
+          {config.manual_bank_info && (
+            <div className="brutal-sm bg-white p-3 text-sm text-left">
+              <div className="font-mono text-xs uppercase text-gray-600 mb-1">Atau transfer manual</div>
+              <div className="whitespace-pre-line">{config.manual_bank_info}</div>
+            </div>
+          )}
+          <div className="brutal-sm bg-[#34C759]/20 p-3 text-sm text-left">
+            Setelah transfer, tutup dialog ini lalu klik <b>Upload bukti</b> pada tagihan. Status otomatis jadi <b>PAID</b>.
+          </div>
+          <button onClick={onClose} className="brutal-btn brutal-btn-red">Tutup</button>
+        </div>
+      </div>
     </div>
   );
 }

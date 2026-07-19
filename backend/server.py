@@ -361,6 +361,18 @@ class SubscriptionInput(BaseModel):
     status: str = "active"
 
 
+class SubscriptionUpdate(BaseModel):
+    user_id: Optional[str] = None
+    service_id: Optional[str] = None
+    plan_id: Optional[str] = None
+    group_id: Optional[str] = None
+    role: Optional[str] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    price: Optional[float] = None
+    status: Optional[str] = None
+
+
 class GroupInput(BaseModel):
     service_id: str
     name: str
@@ -397,6 +409,24 @@ class UploadReceiptInput(BaseModel):
     payment_id: str
     file_base64: str  # data:image/png;base64,....
     file_name: str
+
+
+class ChooseMethodInput(BaseModel):
+    method: str  # 'qris' or 'midtrans'
+
+
+class PaymentConfigInput(BaseModel):
+    qris_image_base64: Optional[str] = None  # data URL
+    qris_notes: Optional[str] = ""
+    midtrans_fee_percent: float = 5.0
+    manual_bank_info: Optional[str] = ""
+
+
+class CreateAdminInput(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
+    name: str
+    username: Optional[str] = None
 
 
 class ReminderConfigInput(BaseModel):
@@ -502,7 +532,7 @@ async def lifespan(app: FastAPI):
             pass
     await db.users.create_index("referral_code", unique=True, sparse=True)
     await db.referral_rewards.create_index("referrer_id")
-    # Seed admin
+    # Seed admin (never force-reset password so admin can change it after login)
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@patungandigital.id")
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
     existing = await db.users.find_one({"email": admin_email})
@@ -515,12 +545,20 @@ async def lifespan(app: FastAPI):
             "role": "admin",
             "created_at": now_utc().isoformat(),
         })
-        logger.info("Seeded admin user")
-    elif not verify_password(admin_password, existing["password_hash"]):
-        await db.users.update_one(
-            {"email": admin_email},
-            {"$set": {"password_hash": hash_password(admin_password)}},
-        )
+        logger.info(f"Seeded admin user: {admin_email}")
+    # One-off cleanup: legacy orphan subscription with user_id='0'
+    orphan = await db.subscriptions.delete_many({"user_id": "0"})
+    if orphan.deleted_count:
+        logger.info(f"Cleaned {orphan.deleted_count} orphan subscription(s) with user_id='0'")
+    # Seed default payment_config (5% Midtrans fee, empty QRIS)
+    if not await db.settings.find_one({"key": "payment_config"}):
+        await db.settings.insert_one({
+            "key": "payment_config",
+            "qris_image_base64": None,
+            "qris_notes": "Scan QRIS lalu upload bukti transfer. Otomatis diverifikasi.",
+            "manual_bank_info": "",
+            "midtrans_fee_percent": 5.0,
+        })
     # Seed default reminder config
     if not await db.settings.find_one({"key": "reminder_config"}):
         await db.settings.insert_one({
@@ -797,11 +835,14 @@ async def admin_create_sub(input: SubscriptionInput, admin: dict = Depends(requi
 
 
 @api.patch("/admin/subscriptions/{sub_id}")
-async def admin_update_sub(sub_id: str, input: SubscriptionInput, admin: dict = Depends(require_admin)):
-    doc = input.model_dump()
-    doc["start_date"] = doc["start_date"].isoformat() if doc.get("start_date") else None
-    doc["end_date"] = doc["end_date"].isoformat() if doc.get("end_date") else None
-    await db.subscriptions.update_one({"_id": ObjectId(sub_id)}, {"$set": doc})
+async def admin_update_sub(sub_id: str, input: SubscriptionUpdate, admin: dict = Depends(require_admin)):
+    updates = {k: v for k, v in input.model_dump().items() if v is not None}
+    if "start_date" in updates and isinstance(updates["start_date"], datetime):
+        updates["start_date"] = updates["start_date"].isoformat()
+    if "end_date" in updates and isinstance(updates["end_date"], datetime):
+        updates["end_date"] = updates["end_date"].isoformat()
+    if updates:
+        await db.subscriptions.update_one({"_id": ObjectId(sub_id)}, {"$set": updates})
     s = await db.subscriptions.find_one({"_id": ObjectId(sub_id)})
     s["id"] = oid(s.pop("_id"))
     return s
@@ -853,47 +894,84 @@ async def admin_create_payment(input: PaymentInput, admin: dict = Depends(requir
     doc["status"] = "pending"
     doc["created_at"] = now_utc().isoformat()
     doc["receipt"] = None
+    doc["payment_method"] = None  # user picks QRIS or Midtrans
+    doc["base_amount"] = int(input.amount)  # remember original before credits/fees
     # Referral credit application: subtract available credit from user
     sub = await db.subscriptions.find_one({"_id": ObjectId(doc["subscription_id"])})
     payer = await db.users.find_one({"_id": ObjectId(sub["user_id"])}) if sub else None
     applied_credit = 0
-    used_free_month = False
     if payer and payer.get("free_months_credit", 0) > 0:
         # Free month: amount → 0
         doc["amount"] = 0
+        doc["base_amount"] = 0
         doc["free_month_applied"] = True
-        used_free_month = True
         await db.users.update_one({"_id": payer["_id"]}, {"$inc": {"free_months_credit": -1}})
     elif payer and payer.get("referral_credit", 0) > 0:
         applied_credit = min(int(payer["referral_credit"]), int(doc["amount"]))
         doc["amount"] = int(doc["amount"]) - applied_credit
+        doc["base_amount"] = int(doc["amount"])
         doc["referral_credit_applied"] = applied_credit
         await db.users.update_one({"_id": payer["_id"]}, {"$inc": {"referral_credit": -applied_credit}})
-    # Insert
+    # Insert (no Midtrans snap yet — user chooses method later)
     result = await db.payments.insert_one(doc)
-    order_id = f"pd-{result.inserted_id}"
     doc["id"] = oid(result.inserted_id)
     doc.pop("_id", None)
-    if doc.get("due_date"):
+    if doc.get("due_date") and isinstance(doc["due_date"], datetime):
         doc["due_date"] = doc["due_date"].isoformat()
-    # Midtrans Snap invoice (best effort)
-    if MIDTRANS_SERVER_KEY and doc["amount"] > 0 and payer:
-        svc = await db.services.find_one({"_id": ObjectId(sub["service_id"])}) if sub else None
+    return doc
+
+
+@api.post("/me/payments/{payment_id}/choose-method")
+async def choose_payment_method(payment_id: str, input: ChooseMethodInput, user: dict = Depends(get_current_user)):
+    """User picks QRIS (manual, 0% fee) or Midtrans (auto, +5% fee)."""
+    p = await db.payments.find_one({"_id": ObjectId(payment_id)})
+    if not p:
+        raise HTTPException(404, "Payment not found")
+    sub = await db.subscriptions.find_one({"_id": ObjectId(p["subscription_id"])})
+    if not sub or sub["user_id"] != user["id"]:
+        raise HTTPException(403, "Bukan pembayaran Anda")
+    if input.method not in {"qris", "midtrans"}:
+        raise HTTPException(400, "Metode tidak valid")
+    if p.get("status") == "paid":
+        raise HTTPException(400, "Pembayaran sudah lunas")
+    cfg = await db.settings.find_one({"key": "payment_config"}) or {}
+    fee_pct = float(cfg.get("midtrans_fee_percent", 5.0) or 5.0)
+    base = int(p.get("base_amount") or p.get("amount", 0))
+    updates = {"payment_method": input.method}
+    if input.method == "qris":
+        updates["amount"] = base
+        updates["midtrans_fee"] = 0
+        # clear any stale midtrans snap
+        updates["midtrans_redirect_url"] = None
+        updates["midtrans_token"] = None
+    else:  # midtrans
+        fee = int(round(base * fee_pct / 100.0))
+        final_amount = base + fee
+        updates["amount"] = final_amount
+        updates["midtrans_fee"] = fee
+        updates["midtrans_fee_percent"] = fee_pct
+        # Create snap
+        payer = await db.users.find_one({"_id": ObjectId(sub["user_id"])})
+        svc = await db.services.find_one({"_id": ObjectId(sub["service_id"])})
+        order_id = f"pd-{payment_id}-{int(now_utc().timestamp())}"
         snap = await midtrans_create_snap(
             order_id=order_id,
-            amount=doc["amount"],
-            customer={"name": payer.get("name", ""), "email": payer.get("email", "")},
-            item_name=f"{(svc or {}).get('name','Subscription')} — {doc.get('period_label','')}",
+            amount=final_amount,
+            customer={"name": (payer or {}).get("name", ""), "email": (payer or {}).get("email", "")},
+            item_name=f"{(svc or {}).get('name','Subscription')} — {p.get('period_label','')}",
         )
         if snap:
-            update = {
-                "midtrans_order_id": order_id,
-                "midtrans_token": snap.get("token"),
-                "midtrans_redirect_url": snap.get("redirect_url"),
-            }
-            await db.payments.update_one({"_id": result.inserted_id}, {"$set": update})
-            doc.update(update)
-    return doc
+            updates["midtrans_order_id"] = order_id
+            updates["midtrans_token"] = snap.get("token")
+            updates["midtrans_redirect_url"] = snap.get("redirect_url")
+        else:
+            raise HTTPException(502, "Gagal membuat invoice Midtrans. Coba lagi atau pilih QRIS.")
+    await db.payments.update_one({"_id": ObjectId(payment_id)}, {"$set": updates})
+    p.update(updates)
+    p["id"] = oid(p.pop("_id"))
+    if isinstance(p.get("due_date"), datetime):
+        p["due_date"] = p["due_date"].isoformat()
+    return p
 
 
 @api.get("/admin/payments")
@@ -936,8 +1014,21 @@ async def upload_receipt(payment_id: str, input: UploadReceiptInput, user: dict 
         "file_name": input.file_name,
         "uploaded_at": now_utc().isoformat(),
     }
-    await db.payments.update_one({"_id": ObjectId(payment_id)}, {"$set": {"receipt": receipt, "status": "review"}})
-    return {"ok": True, "receipt": receipt}
+    # Auto-approve on receipt upload (admin can refund/reject later)
+    updates = {
+        "receipt": receipt,
+        "status": "paid",
+        "auto_approved_at": now_utc().isoformat(),
+    }
+    if not p.get("payment_method"):
+        updates["payment_method"] = "qris"
+    await db.payments.update_one({"_id": ObjectId(payment_id)}, {"$set": updates})
+    # Trigger referral rewards (first paid, race-safe inside helper)
+    try:
+        await apply_referral_rewards_if_first_paid(payment_id)
+    except Exception as e:
+        logger.warning(f"referral apply on upload failed: {e}")
+    return {"ok": True, "receipt": receipt, "status": "paid"}
 
 
 # ---------------- Admin: Reminder config ---------------- #
@@ -1217,7 +1308,65 @@ async def google_exchange(input: GoogleSessionInput, response: Response):
 # Moved to routers/webhooks.py
 
 
-# ---------------- Admin: Cleanup test users ---------------- #
+# ---------------- Payment config (QRIS image + Midtrans fee) ---------------- #
+@api.get("/payment-config")
+async def get_payment_config_public():
+    """Public endpoint used by user dashboard to render QRIS + fee info."""
+    cfg = await db.settings.find_one({"key": "payment_config"}) or {}
+    return {
+        "qris_image_base64": cfg.get("qris_image_base64"),
+        "qris_notes": cfg.get("qris_notes", ""),
+        "manual_bank_info": cfg.get("manual_bank_info", ""),
+        "midtrans_fee_percent": float(cfg.get("midtrans_fee_percent", 5.0) or 5.0),
+    }
+
+
+@api.get("/admin/payment-config")
+async def admin_get_payment_config(admin: dict = Depends(require_admin)):
+    cfg = await db.settings.find_one({"key": "payment_config"}) or {}
+    cfg.pop("_id", None)
+    return {
+        "qris_image_base64": cfg.get("qris_image_base64"),
+        "qris_notes": cfg.get("qris_notes", ""),
+        "manual_bank_info": cfg.get("manual_bank_info", ""),
+        "midtrans_fee_percent": float(cfg.get("midtrans_fee_percent", 5.0) or 5.0),
+    }
+
+
+@api.put("/admin/payment-config")
+async def admin_set_payment_config(input: PaymentConfigInput, admin: dict = Depends(require_admin)):
+    payload = {k: v for k, v in input.model_dump().items() if v is not None}
+    payload["key"] = "payment_config"
+    await db.settings.update_one({"key": "payment_config"}, {"$set": payload}, upsert=True)
+    await log_admin_action(admin, "update_payment_config", "settings", {
+        "midtrans_fee_percent": payload.get("midtrans_fee_percent"),
+        "qris_updated": bool(input.qris_image_base64),
+    })
+    return {"ok": True}
+
+
+# ---------------- Admin: create additional admin ---------------- #
+@api.post("/admin/create-admin")
+async def admin_create_admin(input: CreateAdminInput, admin: dict = Depends(require_admin)):
+    email = input.email.lower()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(400, "Email sudah terdaftar")
+    doc = {
+        "email": email,
+        "password_hash": hash_password(input.password),
+        "name": input.name,
+        "username": input.username or email.split("@")[0],
+        "role": "admin",
+        "extra": {},
+        "created_at": now_utc().isoformat(),
+    }
+    result = await db.users.insert_one(doc)
+    doc["_id"] = result.inserted_id
+    await log_admin_action(admin, "create_admin", f"user:{result.inserted_id}", {"email": email})
+    return user_out(doc)
+
+
+
 @api.post("/admin/cleanup-test-users")
 async def cleanup_test_users(admin: dict = Depends(require_admin), prefix: str = "Iter"):
     """Delete non-admin users whose name matches ^{prefix}. Also removes their subs & payments."""

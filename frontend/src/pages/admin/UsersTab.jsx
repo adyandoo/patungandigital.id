@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { PlusCircle, Trash, PencilSimple, DownloadSimple, X } from "@phosphor-icons/react";
+import { PlusCircle, Trash, PencilSimple, DownloadSimple, X, ShieldStar } from "@phosphor-icons/react";
 import { Modal, F, SearchInput } from "./shared";
 
 export default function UsersTab() {
   const [users, setUsers] = useState([]);
   const [showModal, setShowModal] = useState(false);
+  const [showAdminModal, setShowAdminModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [selected, setSelected] = useState([]);
   const [q, setQ] = useState("");
@@ -62,6 +63,9 @@ export default function UsersTab() {
           <button data-testid="admin-add-user" className="brutal-btn brutal-btn-red text-sm" onClick={() => { setEditing(null); setShowModal(true); }}>
             <PlusCircle weight="bold" /> Tambah User
           </button>
+          <button data-testid="admin-create-admin" className="brutal-btn brutal-btn-yellow text-sm" onClick={() => setShowAdminModal(true)}>
+            <ShieldStar weight="bold" /> Buat Admin
+          </button>
         </div>
       </div>
       <div className="brutal overflow-x-auto">
@@ -102,7 +106,35 @@ export default function UsersTab() {
         </table>
       </div>
       {showModal && <UserModal user={editing} onClose={() => setShowModal(false)} onSaved={() => { setShowModal(false); load(); }} />}
+      {showAdminModal && <AdminModal onClose={() => setShowAdminModal(false)} onSaved={() => { setShowAdminModal(false); load(); }} />}
     </div>
+  );
+}
+
+function AdminModal({ onClose, onSaved }) {
+  const [form, setForm] = useState({ email: "", name: "", username: "", password: "" });
+  const save = async (e) => {
+    e.preventDefault();
+    if ((form.password || "").length < 8) return toast.error("Password admin minimal 8 karakter.");
+    try {
+      await api.post("/admin/create-admin", form);
+      toast.success("Admin baru dibuat.");
+      onSaved();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+  return (
+    <Modal onClose={onClose} title="Buat Admin Baru">
+      <form onSubmit={save} className="space-y-3" data-testid="admin-modal-form">
+        <div className="brutal-sm bg-[#FFD60A]/40 p-3 text-sm">
+          Admin baru bisa mengelola user, layanan, dan pembayaran seperti kamu. Beri password kuat minimal 8 karakter.
+        </div>
+        <F label="Nama"><input required className="brutal-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="am-name" /></F>
+        <F label="Email"><input required type="email" className="brutal-input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} data-testid="am-email" /></F>
+        <F label="Username (opsional)"><input className="brutal-input" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></F>
+        <F label="Password (min 8)"><input required type="password" minLength={8} className="brutal-input" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} data-testid="am-password" /></F>
+        <button type="submit" className="brutal-btn brutal-btn-red" data-testid="am-save">Buat Admin</button>
+      </form>
+    </Modal>
   );
 }
 

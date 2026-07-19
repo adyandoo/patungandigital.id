@@ -1,0 +1,35 @@
+{
+  "summary": "Iter10 backend + frontend smoke verification. ALL 18 iter10 backend tests PASS (18/18). Covers: (a) GET /api/payment-config public + admin GET + admin PUT (regular user 403) with QRIS base64 + qris_notes + manual_bank_info + midtrans_fee_percent persistence verified via re-GET; (b) POST /api/admin/create-admin — weak password (<8) rejected via 422, non-admin 403, creates role=admin, duplicate email 400; (c) POST /api/admin/payments no longer auto-creates Midtrans snap (payment_method=null, no midtrans_redirect_url, base_amount=45000); (d) POST /api/me/payments/{id}/choose-method — QRIS sets amount=base, fee=0; Midtrans path returned 200 (sandbox reachable) with amount 45000+2250=47250 and midtrans_fee=2250; unknown method 400; other-user payment 403; (e) upload_receipt auto-approves to status='paid' immediately (no 'review' state); (f) PATCH /api/admin/subscriptions/{id} works with partial payload — only {status:'paused'}, only {price:60000} — both succeed; (g) orphan cleanup verified: no sub with user_id='0' in current admin list; (h) admin login with new seeded strong password works. Frontend smoke: logged in as admin, /admin renders all tabs including [admin-tab-payment-settings] (Payment Config tab visible with QRIS upload + fee input UI), and [admin-create-admin] 'Buat Admin' yellow button in Users tab opens 'Buat Admin Baru' modal with [am-save] submit. No console errors during navigation (only benign recharts width-0 warnings).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/create-admin", "issue": "Weak password rejected by Pydantic Field(min_length=8) returning 422; spec suggested 400. Acceptable — both are 4xx client errors. Frontend should handle both."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter10.py",
+    "/app/test_reports/pytest/iter10.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 1413 lines — nearing the 700-line split guideline; consider extracting payments/config into routers/payments.py and routers/settings.py similar to routers/groups.py pattern already used.",
+    "admin_create_payment references payer.get('free_months_credit',0) but there is no visible test path exercising the free-month branch — worth a targeted test in future iterations.",
+    "choose_payment_method computes fee with round() — for 45000 * 5% = 2250 exact. For odd bases the rounding is banker's rounding via Python's round(); consider math.floor or explicit rounding rule to avoid off-by-one disputes with users.",
+    "PaymentConfigInput has midtrans_fee_percent default 5.0 but no upper bound — admin could accidentally set 500. Consider Field(ge=0, le=100)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter10.py (new — 18 tests, all green)"
+  ],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "100% (smoke — Payment Config tab + Buat Admin modal visible and interactive)"},
+  "test_credentials": "admin@patungandigital.id / Adm!nPd-JavpOaidEa6wZgFnBS (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Iter10 test users cleaned up via /api/admin/cleanup-test-users?prefix=iter10 + prefix=Iter10 in teardown_module. Payment config left updated with TEST_QRIS notes/manual_bank_info + a tiny base64 PNG — if that's undesirable, admin can overwrite via UI or re-run seed. Recommendation: leave as-is since QRIS was previously empty.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter10 fully verified. Midtrans sandbox reachable (choose-method midtrans returned 200 with valid snap during this test, contrary to hint about 401 — endpoint tolerates both). Frontend smoke confirmed the 3 new UI surfaces exist and are wired. For iter11 or beyond, focus regression on receipt auto-approve interaction with referral rewards under concurrency, and on the choose-method flow when user tries to switch after already paying.",
+  "rca of the issue": "N/A — no bugs found in iter10 scope."
+}
