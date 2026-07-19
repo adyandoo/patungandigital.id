@@ -32,64 +32,71 @@ h1, h2, h3, h4, h5, h6, .font-display {
   font-family: 'Space Mono', monospace;
 }
 
-/* Brutalist utilities */
-.brutal {
-  border: 2px solid var(--pd-ink);
-  box-shadow: 6px 6px 0 var(--pd-ink);
-  background: var(--pd-card);
-}
-.brutal-sm { border: 2px solid var(--pd-ink); box-shadow: 4px 4px 0 var(--pd-ink); }
-.brutal-lg { border: 2px solid var(--pd-ink); box-shadow: 10px 10px 0 var(--pd-ink); }
-.brutal-hover {
-  transition: transform 200ms ease, box-shadow 200ms ease;
-}
-.brutal-hover:hover {
-  transform: translate(-3px, -3px);
-  box-shadow: 10px 10px 0 var(--pd-ink);
-}
-.brutal-btn {
-  border: 2px solid var(--pd-ink);
-  box-shadow: 4px 4px 0 var(--pd-ink);
-  background: var(--pd-ink);
-  color: #fff;
-  padding: 0.75rem 1.5rem;
-  font-weight: 700;
-  font-family: 'Outfit', sans-serif;
-  letter-spacing: -0.01em;
-  transition: transform 150ms ease, box-shadow 150ms ease;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-.brutal-btn:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0 var(--pd-ink); }
-.brutal-btn:active { transform: translate(0, 0); box-shadow: 2px 2px 0 var(--pd-ink); }
-.brutal-btn-red { background: var(--pd-red); }
-.brutal-btn-blue { background: var(--pd-blue); }
-.brutal-btn-yellow { background: var(--pd-yellow); color: var(--pd-ink); }
-.brutal-btn-white { background: #fff; color: var(--pd-ink); }
-.brutal-btn-green { background: var(--pd-green); }
+/* Brutalist utilities — wrapped in @layer components so Tailwind utility classes
+   (bg-[#FFD60A], text-white, etc.) can override the defaults set here. */
+@layer components {
+  .brutal {
+    border: 2px solid var(--pd-ink);
+    box-shadow: 6px 6px 0 var(--pd-ink);
+    background: var(--pd-card);
+    color: var(--pd-ink);
+  }
+  .brutal-sm { border: 2px solid var(--pd-ink); box-shadow: 4px 4px 0 var(--pd-ink); background: var(--pd-card); color: var(--pd-ink); }
+  .brutal-lg { border: 2px solid var(--pd-ink); box-shadow: 10px 10px 0 var(--pd-ink); background: var(--pd-card); color: var(--pd-ink); }
+  .brutal-hover {
+    transition: transform 200ms ease, box-shadow 200ms ease;
+  }
+  .brutal-hover:hover {
+    transform: translate(-3px, -3px);
+    box-shadow: 10px 10px 0 var(--pd-ink);
+  }
+  .brutal-btn {
+    border: 2px solid var(--pd-ink);
+    box-shadow: 4px 4px 0 var(--pd-ink);
+    background: var(--pd-ink);
+    color: #fff;
+    padding: 0.75rem 1.5rem;
+    font-weight: 700;
+    font-family: 'Outfit', sans-serif;
+    letter-spacing: -0.01em;
+    transition: transform 150ms ease, box-shadow 150ms ease;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .brutal-btn:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0 var(--pd-ink); }
+  .brutal-btn:active { transform: translate(0, 0); box-shadow: 2px 2px 0 var(--pd-ink); }
+  .brutal-btn-red { background: var(--pd-red); color: #fff; }
+  .brutal-btn-blue { background: var(--pd-blue); color: #fff; }
+  .brutal-btn-yellow { background: var(--pd-yellow); color: var(--pd-ink); }
+  .brutal-btn-white { background: #fff; color: var(--pd-ink); }
+  .brutal-btn-green { background: var(--pd-green); color: #fff; }
 
-.brutal-input {
-  border: 2px solid var(--pd-ink);
-  background: #fff;
-  padding: 0.75rem 1rem;
-  font-family: 'IBM Plex Sans', sans-serif;
-  border-radius: 0;
-  width: 100%;
-  outline: none;
-}
-.brutal-input:focus { box-shadow: 4px 4px 0 var(--pd-ink); }
+  .brutal-input {
+    border: 2px solid var(--pd-ink);
+    background: #fff;
+    color: var(--pd-ink);
+    padding: 0.75rem 1rem;
+    font-family: 'IBM Plex Sans', sans-serif;
+    border-radius: 0;
+    width: 100%;
+    outline: none;
+  }
+  .brutal-input:focus { box-shadow: 4px 4px 0 var(--pd-ink); }
+  .brutal-input::placeholder { color: rgba(10, 10, 10, 0.45); }
 
-.pd-tag {
-  display: inline-block;
-  padding: 0.25rem 0.75rem;
-  border: 2px solid var(--pd-ink);
-  background: #fff;
-  font-family: 'Space Mono', monospace;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  .pd-tag {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border: 2px solid var(--pd-ink);
+    background: #fff;
+    color: var(--pd-ink);
+    font-family: 'Space Mono', monospace;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
 }
 
 /* Grid noise texture */

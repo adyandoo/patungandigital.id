@@ -1,0 +1,28 @@
+{
+  "summary": "Iter21 tests PASSED: P0b DB state clean (only admin + 3 core services), P1 upload-receipt endpoint works both with and without payment_id in body, P0a CSS visual fixes verified on login + homepage + admin dashboard.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin dashboard", "issues": ["Overview stat card shows 'Users: 0' although admin exists in DB — likely admin filtered out of count. Not a CSS/contrast bug, just noting."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter21.py",
+    "/app/test_reports/pytest/iter21.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is ~2469 lines — should be split into routers/modules (auth, payments, admin, subscriptions) for maintainability.",
+    "Admin overview 'Users' count shows 0 even though 1 admin exists — likely intentional (filtering role=admin) but confirm expected behavior."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter21.py"],
+  "success_rate": {"backend": "100% (17/17)", "frontend": "100% visual checks passed"},
+  "test_credentials": "admin@patungandigital.id / Adm!nPd-JavpOaidEa6wZgFnBS",
+  "seed_data_creation": "Created 1 test user + a couple of subscriptions/groups during upload-receipt tests. All cleaned up at end. Final DB state: users=1, services=3, all others=0.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "DB is minimal (admin + 3 services). Register endpoint lowercases email. Payment lookup in DB uses _id ObjectId, not id field. Subscription creation endpoint is POST /api/me/subscriptions/join (not /api/me/subscriptions). Tests in test_iter21.py handle all this.",
+  "rca of the issue": "P0a root cause confirmed: .brutal/.pd-tag CSS was OUTSIDE @layer components; wrapping in @layer components restored Tailwind utility precedence. Visual verification on live URL shows MASUK=black-on-yellow, HEMAT=black-on-yellow, 100% LEGAL=white-on-blue — all readable."
+}

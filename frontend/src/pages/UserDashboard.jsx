@@ -306,7 +306,6 @@ function PaymentsPanel({ payments, reload }) {
     try {
       const b64 = await toBase64(file);
       await api.post(`/me/payments/${paymentId}/receipt`, {
-        payment_id: paymentId,
         file_base64: b64,
         file_name: file.name,
       });
@@ -715,7 +714,7 @@ function AnnouncementsPanel() {
               <div className="flex items-center gap-2">
                 <Megaphone weight="fill" size={20} />
                 <span className="pd-tag bg-white text-black">{a.severity}</span>
-                {a.dismissed && <span className="pd-tag bg-white/40 text-white">Sudah dibaca</span>}
+                {a.dismissed && <span className="pd-tag bg-white/40 text-black/80">Sudah dibaca</span>}
               </div>
               <span className="text-xs font-mono opacity-80">{a.created_at ? new Date(a.created_at).toLocaleString("id-ID") : ""}</span>
             </div>

@@ -576,7 +576,6 @@ class PaymentInput(BaseModel):
 
 
 class UploadReceiptInput(BaseModel):
-    payment_id: str
     file_base64: str  # data:image/png;base64,....
     file_name: str
 
