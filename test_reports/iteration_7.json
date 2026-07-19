@@ -1,0 +1,24 @@
+{
+  "summary": "Iter6 retest: BOTH critical bugs fixed and verified. (A) apply_referral_rewards_if_first_paid now unconditionally sets first_paid_at on any first paid payment — organic (non-referred) users now flip first_payment onboarding step. (B) OnboardingCard is re-added to UserDashboard.jsx with all required data-testids and renders correctly for new users (40% for signup+profile). All 78 backend tests pass (63 previous + 11 test_iter6.py including previously-failing test_first_payment_flips_step + 3 new iter6_retest + 1 misc). Frontend E2E on new user shows onboarding-card, all 5 onboarding-step-<key>, onboarding-next-btn with correct label 'Lihat tagihan →' pointing to payments tab.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter6.py",
+    "/app/backend/tests/test_iter6_retest.py",
+    "/app/test_reports/pytest/iter6_retest.xml",
+    "/app/test_reports/pytest/all_iter6_retest.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Idempotency correctly implemented via `is_first_paid = not payer.get('first_paid_at')` gate before crediting — clean guard. Consider also making the DB update use `$setOnInsert`-style conditional (e.g., filter `{'first_paid_at': None}`) to guard against concurrent PATCH races — currently there is a small window where two parallel paid-transitions could both compute is_first_paid=True and double-credit. Not observed in tests but worth a race-safe upgrade.",
+    "server.py apply_referral_rewards_if_first_paid: consider persisting `first_paid_payment_id` alongside first_paid_at for auditing which payment triggered the transition."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter6_retest.py (new — 3 tests, all pass)"],
+  "success_rate": {"backend": "100% (78/78)", "frontend": "100% (all requested testids present + next-btn label correct)"},
+  "test_credentials": "admin@patungandigital.id / admin123",
+  "seed_data_creation": "iter6r_organic_*, iter6r_referrer_*, iter6r_referred_*, iter6r_referrer2_*, iter6r_referred2_* users + subs + payments. Also 1 UI user iter6ui_*. Cleanup via POST /api/admin/cleanup-test-users?prefix=Iter6R or ?prefix=Iter6.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter6 fully verified. Backend regression suite is 78 tests, all pass in ~80s. Run: `REACT_APP_BACKEND_URL=<url> pytest backend/tests/ -o addopts=''`. For UI retest of onboarding: register a new user via /register (fill 5 inputs + whatsapp), then /dashboard shows onboarding-card at 40%. Note: referral_credit auto-applies on new payment creation (deducts from user_balance) — this is expected behavior; idempotency should be checked via referrer credit and successful_count, not referred user's credit.",
+  "rca of the issue": "N/A — both prior iter6 bugs are now fixed. Verified: (1) test_first_payment_flips_step now PASSES (was the sole failure in prev iter). (2) OnboardingCard is present with all data-testids matching spec. (3) Idempotency confirmed: second paid payment does NOT increment referrer's referral_credit or successful_count or emit a duplicate referral_reward_credited log entry."
+}

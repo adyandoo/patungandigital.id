@@ -9,12 +9,18 @@ export default function UserDashboard() {
   const [tab, setTab] = useState("subs");
   const [subs, setSubs] = useState([]);
   const [payments, setPayments] = useState([]);
+  const [onboarding, setOnboarding] = useState(null);
 
   const loadAll = async () => {
     try {
-      const [s, p] = await Promise.all([api.get("/me/subscriptions"), api.get("/me/payments")]);
+      const [s, p, o] = await Promise.all([
+        api.get("/me/subscriptions"),
+        api.get("/me/payments"),
+        api.get("/me/onboarding"),
+      ]);
       setSubs(s.data);
       setPayments(p.data);
+      setOnboarding(o.data);
     } catch {}
   };
 
@@ -37,6 +43,11 @@ export default function UserDashboard() {
         </div>
       </div>
 
+      {/* Onboarding checklist */}
+      {onboarding && onboarding.completed < onboarding.total && (
+        <OnboardingCard data={onboarding} goToTab={setTab} />
+      )}
+
       {/* Tabs */}
       <div className="mt-8 flex gap-2 border-b-2 border-black overflow-x-auto">
         <TabBtn active={tab === "subs"} onClick={() => setTab("subs")} icon={<Ticket weight="duotone" />} label="Langganan" testid="tab-subs" />
@@ -53,6 +64,62 @@ export default function UserDashboard() {
         {tab === "profile" && <ProfilePanel user={user} setUser={setUser} />}
         {tab === "password" && <PasswordPanel />}
       </div>
+    </div>
+  );
+}
+
+function OnboardingCard({ data, goToTab }) {
+  const nextAction = {
+    profile: { tab: "profile", label: "Isi WhatsApp sekarang" },
+    first_payment: { tab: "payments", label: "Lihat tagihan" },
+    invite: { tab: "referral", label: "Ambil kode referral" },
+    reward: { tab: "referral", label: "Ajak lebih banyak teman" },
+  };
+  const nextStep = data.steps.find((s) => !s.done);
+  const next = nextStep ? nextAction[nextStep.key] : null;
+  return (
+    <div className="mt-6 brutal p-6 md:p-8 bg-gradient-to-br from-[#FFD60A]/40 to-white" data-testid="onboarding-card">
+      <div className="flex items-start justify-between flex-wrap gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <Sparkle weight="fill" size={22} />
+            <div className="font-display font-bold text-xl">Mulai dari sini</div>
+          </div>
+          <div className="text-sm text-gray-700 mt-1">Selesaikan {data.total - data.completed} langkah lagi buat unlock full benefit patungan.</div>
+        </div>
+        <div className="text-right">
+          <div className="font-display font-black text-4xl">{data.percent}%</div>
+          <div className="text-xs font-mono text-gray-600">{data.completed}/{data.total} selesai</div>
+        </div>
+      </div>
+
+      <div className="mt-4 h-3 border-2 border-black bg-white overflow-hidden">
+        <div className="h-full bg-[#34C759]" style={{ width: `${data.percent}%` }}></div>
+      </div>
+
+      <div className="mt-6 grid md:grid-cols-5 gap-3" data-testid="onboarding-steps">
+        {data.steps.map((s, idx) => (
+          <div key={s.key} className={`brutal-sm p-3 flex items-start gap-2 ${s.done ? "bg-[#34C759]/25" : "bg-white"}`} data-testid={`onboarding-step-${s.key}`}>
+            {s.done
+              ? <CheckFat weight="fill" size={20} className="text-[#0A0A0A] shrink-0 mt-0.5" />
+              : <Circle weight="regular" size={20} className="text-gray-400 shrink-0 mt-0.5" />}
+            <div className="text-sm">
+              <div className="font-mono text-[10px] text-gray-600">STEP {idx + 1}</div>
+              <div className={`font-semibold ${s.done ? "line-through text-gray-600" : ""}`}>{s.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {next && (
+        <button
+          onClick={() => goToTab(next.tab)}
+          className="brutal-btn brutal-btn-red mt-6"
+          data-testid="onboarding-next-btn"
+        >
+          {next.label} →
+        </button>
+      )}
     </div>
   );
 }

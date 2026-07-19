@@ -176,37 +176,41 @@ async def ensure_referral_code(user_id: str) -> str:
 
 
 async def apply_referral_rewards_if_first_paid(payment_id: str):
-    """If payment just transitioned to paid and belongs to a user referred by someone,
-    and this is their first paid payment, credit Rp REFERRAL_REWARD to both."""
+    """If payment just transitioned to paid, always mark user's first_paid_at.
+    If the user was referred and this is their first paid, credit both users."""
     p = await db.payments.find_one({"_id": ObjectId(payment_id)})
     if not p or p.get("status") != "paid":
         return
     sub = await db.subscriptions.find_one({"_id": ObjectId(p["subscription_id"])})
     if not sub:
         return
-    referred_user = await db.users.find_one({"_id": ObjectId(sub["user_id"])})
-    if not referred_user or referred_user.get("first_paid_at") or not referred_user.get("referred_by"):
+    payer = await db.users.find_one({"_id": ObjectId(sub["user_id"])})
+    if not payer:
         return
-    referrer_id = referred_user["referred_by"]
+    # Always mark first_paid_at for onboarding + analytics regardless of referral status
+    is_first_paid = not payer.get("first_paid_at")
+    if is_first_paid:
+        await db.users.update_one({"_id": payer["_id"]}, {"$set": {"first_paid_at": now_utc()}})
+    # Referral reward only when this was the first paid AND user was referred
+    if not (is_first_paid and payer.get("referred_by")):
+        return
+    referrer_id = payer["referred_by"]
     referrer = await db.users.find_one({"_id": ObjectId(referrer_id)}) if ObjectId.is_valid(referrer_id) else None
     if not referrer:
         return
     # Credit both
-    await db.users.update_one({"_id": referred_user["_id"]}, {
-        "$set": {"first_paid_at": now_utc()},
-        "$inc": {"referral_credit": REFERRAL_REWARD},
-    })
+    await db.users.update_one({"_id": payer["_id"]}, {"$inc": {"referral_credit": REFERRAL_REWARD}})
     await db.users.update_one({"_id": referrer["_id"]}, {"$inc": {"referral_credit": REFERRAL_REWARD}})
     await db.referral_rewards.insert_one({
         "referrer_id": str(referrer["_id"]),
-        "referred_id": str(referred_user["_id"]),
+        "referred_id": str(payer["_id"]),
         "payment_id": payment_id,
         "type": "cash",
         "amount": REFERRAL_REWARD,
         "created_at": now_utc(),
     })
-    await log_admin_action(None, "referral_reward_credited", f"user:{referred_user['_id']}",
-                           {"referrer": referrer.get("email"), "referred": referred_user.get("email"), "amount": REFERRAL_REWARD})
+    await log_admin_action(None, "referral_reward_credited", f"user:{payer['_id']}",
+                           {"referrer": referrer.get("email"), "referred": payer.get("email"), "amount": REFERRAL_REWARD})
     # Check tier rewards for the referrer
     await maybe_grant_tier_rewards(str(referrer["_id"]))
 
