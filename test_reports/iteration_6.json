@@ -1,0 +1,42 @@
+{
+  "summary": "Iter6 tested: server.py router split (analytics/referral/webhooks) has zero regressions (64/64 previous tests still pass). New admin cleanup endpoint + admin UI button work end-to-end. Onboarding backend endpoint returns correct shape/percent. HOWEVER — the Onboarding frontend component (OnboardingCard) is COMPLETELY MISSING from UserDashboard.jsx (data-testid=onboarding-card/onboarding-steps/onboarding-next-btn all absent, /me/onboarding is not fetched in loadAll). The main agent's note admits the file was truncated to 420 lines — the truncation removed the OnboardingCard entirely. Also found a real backend bug: onboarding first_payment step never flips for non-referred users because first_paid_at is only set inside apply_referral_rewards_if_first_paid (server.py:188), which early-returns when referred_by is null.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "/api/me/onboarding", "issue": "first_payment step stays done=false forever for non-referred users. Root cause: first_paid_at is only set in apply_referral_rewards_if_first_paid() which early-returns when user.referred_by is null (server.py L188). Fix: set first_paid_at on ANY first paid payment regardless of referral status.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "UserDashboard", "issue": "OnboardingCard component + /me/onboarding fetch + all three data-testids (onboarding-card, onboarding-steps, onboarding-next-btn) are MISSING from the file. UserDashboard.jsx (421 lines) contains no reference to 'onboarding' at all. Feature P3 of iter6 is not shipped to frontend.", "selector": "[data-testid=onboarding-card]", "priority": "CRITICAL"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter6.py",
+    "/app/test_reports/pytest/iter6.xml",
+    "/app/test_reports/pytest/all_iter6.xml"
+  ],
+  "action_items": [
+    "(CRITICAL frontend) Re-add OnboardingCard component to UserDashboard.jsx: fetch /me/onboarding in loadAll, render <div data-testid=onboarding-card> above the tabs when data.percent < 100, with [data-testid=onboarding-steps] listing 5 steps each as [data-testid=onboarding-step-<key>] (signup/profile/first_payment/invite/reward), a progress bar with width matching percent, and [data-testid=onboarding-next-btn] that switches setTab to 'profile' (if !profile.done) / 'payments' (if !first_payment.done) / 'referral' (if !invite.done or !reward.done).",
+    "(HIGH backend) In apply_referral_rewards_if_first_paid (or wherever payment status flips to paid), always set first_paid_at on the user regardless of referred_by. Otherwise onboarding + successful_count logic for future features never trigger for organic (non-referred) users.",
+    "(nit) Consider filtering test-prefixed users (Iter*, iter*) from public /api/leaderboard for production — leftover from iter5."
+  ],
+  "critical_code_review_comments": [
+    "server.py L1195 calls app.include_router(api) BEFORE the split routers are included at L1201-1203. This works because both `api` and split routers are mounted, but the ordering plus the import-at-bottom pattern is fragile: any dev adding new endpoints inside routers/*.py must remember they get /api prefix from app.include_router(...,prefix='/api'), NOT from being on `api`. Consider consolidating to one include_router call after all imports.",
+    "routers/referral.py L20-23 does an ObjectId.is_valid check on user.referred_by but doesn't handle the case where referred_by exists but user was deleted (cleanup endpoint sets it to None already — good defensive design there).",
+    "cleanup-test-users regex uses ^{prefix} without escaping — a prefix containing regex metacharacters (e.g. '.', '$') would misbehave. Wrap in re.escape server-side.",
+    "OverviewTab.jsx cleanup handler uses window.prompt/confirm — works but blocks Playwright dialogs; consider a proper shadcn modal for production polish."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter6.py (new — 11 tests, 10 pass, 1 fails exposing the first_paid_at bug)"
+  ],
+  "success_rate": {"backend": "98.7% (74/75 tests — 64 previous + 10/11 iter6; 1 iter6 fail exposes real bug in first_paid_at logic)", "frontend": "50% (admin cleanup button works; OnboardingCard entirely missing)"},
+  "test_credentials": "admin@patungandigital.id / admin123",
+  "seed_data_creation": "Iter6 tests create ~5 iter6_* users (onb1/onb2/onb3, cleanup_nonadmin, CleanupX*). One UI user Iter6ui_* created via browser register. Use POST /api/admin/cleanup-test-users?prefix=Iter6 to remove them.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Router split regression is clean — 64/64 previous tests pass. Run tests: `REACT_APP_BACKEND_URL=<url> pytest backend/tests/test_iter6.py -o addopts=''`. The two open bugs: (1) UserDashboard.jsx has no OnboardingCard — verify main agent re-adds it (was lost due to truncation). (2) first_paid_at only set for referred users — check server.py apply_referral_rewards_if_first_paid or wherever payment→paid transition happens. Iter6 test_first_payment_flips_step will pass once fixed.",
+  "rca of the issue": "Two RCAs. (A) OnboardingCard missing: main agent noted 'Frontend was truncated to 420 lines' — the OnboardingCard implementation was in the truncated portion and the file that was saved contains no onboarding UI. Fix: re-implement per spec. (B) first_paid_at bug: In server.py line ~188, apply_referral_rewards_if_first_paid returns early with `if not referred_user or referred_user.get('first_paid_at') or not referred_user.get('referred_by'): return`. The 'not referred_user.referred_by' condition means organic users never get first_paid_at set. This breaks both the onboarding first_payment step and successful_count analytics. Repro: register a user without referral_code, admin creates paid payment, GET /api/me/onboarding → first_payment.done still false. Fix: extract first_paid_at update into a separate always-run function called from the paid-transition code path, then keep the referral bonus logic gated on referred_by."
+}

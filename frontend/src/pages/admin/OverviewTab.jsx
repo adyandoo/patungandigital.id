@@ -1,17 +1,40 @@
 import { useEffect, useState } from "react";
-import api, { rupiah } from "@/lib/api";
+import api from "@/lib/api";
+import { toast } from "sonner";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { Broom } from "@phosphor-icons/react";
+import { rupiah } from "@/lib/api";
 import { Note } from "./shared";
 
 export default function OverviewTab() {
   const [ana, setAna] = useState(null);
+  const [cleaning, setCleaning] = useState(false);
   useEffect(() => { api.get("/admin/analytics").then((r) => setAna(r.data)).catch(() => {}); }, []);
   const totals = ana?.totals || {};
+
+  const cleanup = async () => {
+    const prefix = window.prompt("Hapus semua user yang namanya diawali (case-insensitive):", "Iter");
+    if (!prefix) return;
+    if (!window.confirm(`Yakin hapus semua user dengan nama diawali "${prefix}"? Termasuk subscriptions, payments & referral data mereka.`)) return;
+    setCleaning(true);
+    try {
+      const { data } = await api.post(`/admin/cleanup-test-users?prefix=${encodeURIComponent(prefix)}`);
+      toast.success(`${data.deleted_users} user + ${data.deleted_subscriptions} subs dihapus`);
+    } catch (e) {
+      toast.error("Cleanup gagal");
+    } finally { setCleaning(false); }
+  };
+
   return (
     <div className="space-y-6">
-      <div className="brutal p-8">
-        <h2 className="font-display font-bold text-2xl">Selamat datang, Admin.</h2>
-        <p className="mt-2 text-gray-700">Gunakan tab di atas untuk mengelola seluruh platform.</p>
+      <div className="brutal p-8 flex items-start justify-between flex-wrap gap-4">
+        <div>
+          <h2 className="font-display font-bold text-2xl">Selamat datang, Admin.</h2>
+          <p className="mt-2 text-gray-700">Gunakan tab di atas untuk mengelola seluruh platform.</p>
+        </div>
+        <button onClick={cleanup} disabled={cleaning} className="brutal-btn brutal-btn-white text-sm" data-testid="admin-cleanup-btn">
+          <Broom weight="bold" /> {cleaning ? "Membersihkan..." : "Cleanup test users"}
+        </button>
       </div>
 
       <div className="grid md:grid-cols-3 gap-6">

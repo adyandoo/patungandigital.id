@@ -1153,209 +1153,54 @@ async def google_exchange(input: GoogleSessionInput, response: Response):
     return {"user": user_out(user), "token": jwt_token}
 
 
-# ---------------- Midtrans webhook ---------------- #
-@api.post("/webhooks/midtrans")
-async def midtrans_webhook(request: Request):
-    """Midtrans notification handler. Signature verified via SHA512."""
-    payload = await request.json()
-    if MIDTRANS_SERVER_KEY and not midtrans_verify_signature(payload):
-        raise HTTPException(status_code=401, detail="invalid signature")
-    order_id = payload.get("order_id", "")
-    if not order_id.startswith("pd-"):
-        return {"ok": True, "note": "ignored (unknown order_id)"}
-    payment_id = order_id[3:]
-    try:
-        obj_id = ObjectId(payment_id)
-    except Exception:
-        return {"ok": True, "note": "invalid payment id"}
-    new_status = midtrans_map_status(payload)
-    updates = {
-        "status": new_status,
-        "midtrans_transaction_id": payload.get("transaction_id"),
-        "midtrans_notification": payload,
-    }
-    if new_status == "paid":
-        updates["midtrans_paid_at"] = now_utc()
-    await db.payments.update_one({"_id": obj_id}, {"$set": updates})
-    if new_status == "paid":
-        await apply_referral_rewards_if_first_paid(payment_id)
-    await log_admin_action(None, "midtrans_webhook", f"payment:{payment_id}",
-                           {"status": new_status, "raw_status": payload.get("transaction_status")})
-    return {"ok": True, "status": new_status}
+# ---------------- Midtrans webhook (moved to routers/webhooks.py) ---------------- #
 
 
-# ---------------- Referral ---------------- #
-@api.get("/me/referral-stats")
-async def my_referral_stats(user: dict = Depends(get_current_user)):
-    code = user.get("referral_code")
-    if not code:
-        code = await ensure_referral_code(user["id"])
-    invited = await db.users.count_documents({"referred_by": user["id"]})
-    successful = await db.users.count_documents({"referred_by": user["id"], "first_paid_at": {"$ne": None}})
-    rewards = await db.referral_rewards.find({"referrer_id": user["id"]}).to_list(None)
-    total_earned = sum((r.get("amount") or 0) for r in rewards)
-    referred_by_user = None
-    if user.get("referred_by") and ObjectId.is_valid(user["referred_by"]):
-        r = await db.users.find_one({"_id": ObjectId(user["referred_by"])})
-        if r:
-            referred_by_user = {"name": r.get("name"), "email": r.get("email")}
-    fresh = await db.users.find_one({"_id": ObjectId(user["id"])})
-    granted = fresh.get("tiers_granted", []) or []
-    # Next tier progress
-    next_tier = next((t for t in TIER_THRESHOLDS if t["tier"] not in granted), None)
-    return {
-        "referral_code": code,
-        "referral_credit": fresh.get("referral_credit", 0),
-        "free_months_credit": fresh.get("free_months_credit", 0),
-        "invited_count": invited,
-        "successful_count": successful,
-        "total_earned": total_earned,
-        "reward_per_referral": REFERRAL_REWARD,
-        "referred_by": referred_by_user,
-        "tiers": TIER_THRESHOLDS,
-        "tiers_granted": granted,
-        "next_tier": next_tier,
-    }
+# ---------------- Referral (endpoints moved to routers/referral.py) ---------------- #
 
 
-@api.get("/leaderboard")
-async def leaderboard():
-    """Public leaderboard: top referrers this month + all time."""
-    now = now_utc()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-    async def rank(match_extra: dict):
-        pipeline = [
-            {"$match": {"referrer_id": {"$ne": None}, "referred_id": {"$ne": None}, **match_extra}},
-            {"$group": {"_id": "$referrer_id", "count": {"$sum": 1}, "total": {"$sum": "$amount"}}},
-            {"$sort": {"count": -1, "total": -1}},
-            {"$limit": 10},
-        ]
-        rows = await db.referral_rewards.aggregate(pipeline).to_list(None)
-        result = []
-        for i, r in enumerate(rows):
-            uref = await db.users.find_one({"_id": ObjectId(r["_id"])}) if ObjectId.is_valid(r["_id"]) else None
-            if not uref:
-                continue
-            result.append({
-                "rank": i + 1,
-                "user_id": r["_id"],
-                "name": uref.get("name") or "-",
-                "initials": "".join([p[0] for p in (uref.get("name") or "-").split()[:2]]).upper(),
-                "count": r["count"],
-                "total_earned": r["total"],
-                "tiers_granted": uref.get("tiers_granted", []) or [],
-            })
-        return result
-
-    monthly = await rank({"created_at": {"$gte": month_start}})
-    all_time = await rank({})
-    return {"monthly": monthly, "all_time": all_time, "month_label": now.strftime("%B %Y")}
-
-
-# ---------------- Xendit webhook ---------------- #
-@api.post("/webhooks/xendit")
-async def xendit_webhook(request: Request):
-    """Xendit calls this on invoice status change. External_id format: pay-{payment_id}."""
-    expected_token = os.environ.get("XENDIT_WEBHOOK_TOKEN", "")
-    received = request.headers.get("X-CALLBACK-TOKEN", "")
-    if expected_token and received != expected_token:
-        raise HTTPException(status_code=401, detail="Invalid callback token")
-    body = await request.json()
-    external_id = body.get("external_id", "")
-    status_val = (body.get("status") or "").upper()
-    if not external_id.startswith("pay-"):
-        return {"ok": True, "note": "ignored (unknown external_id)"}
-    payment_id = external_id[4:]
-    try:
-        obj_id = ObjectId(payment_id)
-    except Exception:
-        return {"ok": True, "note": "invalid payment id"}
-    new_status = None
-    if status_val in ("PAID", "SETTLED"):
-        new_status = "paid"
-    elif status_val in ("EXPIRED", "FAILED"):
-        new_status = "overdue"
-    if new_status:
-        await db.payments.update_one({"_id": obj_id}, {"$set": {"status": new_status, "xendit_paid_at": now_utc()}})
-        await log_admin_action(None, "xendit_webhook", f"payment:{payment_id}", {"status": new_status, "raw_status": status_val})
-    return {"ok": True, "status": new_status}
+# ---------------- Onboarding checklist ---------------- #
+# Moved to routers/referral.py
 
 
 # ---------------- Analytics ---------------- #
-@api.get("/admin/analytics")
-async def admin_analytics(admin: dict = Depends(require_admin)):
-    """Aggregate monthly revenue + revenue-per-service via single $lookup pipeline."""
-    now = now_utc()
-    start = (now.replace(day=1, hour=0, minute=0, second=0, microsecond=0) - timedelta(days=365)).replace(day=1)
-
-    base_pipeline = [
-        {"$match": {"status": "paid"}},
-        {"$addFields": {
-            "created_dt": {"$cond": [{"$eq": [{"$type": "$created_at"}, "string"]},
-                                     {"$dateFromString": {"dateString": "$created_at", "onError": None, "onNull": None}},
-                                     "$created_at"]},
-            "sub_oid": {"$toObjectId": "$subscription_id"},
-        }},
-        {"$lookup": {"from": "subscriptions", "localField": "sub_oid", "foreignField": "_id", "as": "sub"}},
-        {"$unwind": {"path": "$sub", "preserveNullAndEmptyArrays": True}},
-        {"$addFields": {"svc_oid": {"$toObjectId": "$sub.service_id"}}},
-        {"$lookup": {"from": "services", "localField": "svc_oid", "foreignField": "_id", "as": "svc"}},
-        {"$unwind": {"path": "$svc", "preserveNullAndEmptyArrays": True}},
-    ]
-
-    # Monthly (last 12 months)
-    monthly_rows = await db.payments.aggregate(base_pipeline + [
-        {"$match": {"created_dt": {"$gte": start}}},
-        {"$group": {
-            "_id": {"y": {"$year": "$created_dt"}, "m": {"$month": "$created_dt"}},
-            "revenue": {"$sum": "$amount"},
-            "count": {"$sum": 1},
-        }},
-        {"$sort": {"_id.y": 1, "_id.m": 1}},
-    ]).to_list(None)
-
-    months = []
-    cursor = start
-    while cursor <= now:
-        months.append({"year": cursor.year, "month": cursor.month, "revenue": 0, "count": 0})
-        cursor = cursor.replace(year=cursor.year + 1, month=1) if cursor.month == 12 else cursor.replace(month=cursor.month + 1)
-    for row in monthly_rows:
-        y, m = row["_id"]["y"], row["_id"]["m"]
-        for slot in months:
-            if slot["year"] == y and slot["month"] == m:
-                slot["revenue"] = row["revenue"]
-                slot["count"] = row["count"]
-                break
-    labels_id = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
-    monthly = [{"label": f"{labels_id[m['month']-1]} {str(m['year'])[2:]}", "revenue": m["revenue"], "count": m["count"]} for m in months]
-
-    # Revenue by service (single aggregation)
-    by_service_rows = await db.payments.aggregate(base_pipeline + [
-        {"$group": {
-            "_id": "$svc.name",
-            "color": {"$first": "$svc.color"},
-            "revenue": {"$sum": "$amount"},
-            "count": {"$sum": 1},
-        }},
-        {"$sort": {"revenue": -1}},
-    ]).to_list(None)
-    by_service = [{"service": r["_id"] or "-", "color": r.get("color") or "#0A0A0A", "revenue": r["revenue"], "count": r["count"]} for r in by_service_rows]
-
-    # Status distribution + totals
-    status_rows = await db.payments.aggregate([{"$group": {"_id": "$status", "count": {"$sum": 1}, "total": {"$sum": "$amount"}}}]).to_list(None)
-    status_dist = [{"status": r["_id"], "count": r["count"], "total": r["total"]} for r in status_rows]
-    total_rows = await db.payments.aggregate([{"$match": {"status": "paid"}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}, "count": {"$sum": 1}}}]).to_list(None)
-    tr = total_rows[0] if total_rows else {"total": 0, "count": 0}
-    totals = {
-        "total_revenue_paid": tr["total"],
-        "paid_count": tr["count"],
-        "avg_payment": (tr["total"] / tr["count"]) if tr["count"] else 0,
-    }
-    return {"monthly": monthly, "by_service": by_service, "status_distribution": status_dist, "totals": totals}
+# Moved to routers/analytics.py
 
 
+# ---------------- Webhooks (Midtrans + Xendit) ---------------- #
+# Moved to routers/webhooks.py
+
+
+# ---------------- Admin: Cleanup test users ---------------- #
+@api.post("/admin/cleanup-test-users")
+async def cleanup_test_users(admin: dict = Depends(require_admin), prefix: str = "Iter"):
+    """Delete non-admin users whose name matches ^{prefix}. Also removes their subs & payments."""
+    q = {"role": {"$ne": "admin"}, "name": {"$regex": f"^{prefix}", "$options": "i"}}
+    victims = await db.users.find(q).to_list(None)
+    victim_ids = [str(v["_id"]) for v in victims]
+    user_delete = await db.users.delete_many(q)
+    subs = await db.subscriptions.find({"user_id": {"$in": victim_ids}}).to_list(None)
+    sub_ids = [str(s["_id"]) for s in subs]
+    await db.subscriptions.delete_many({"user_id": {"$in": victim_ids}})
+    await db.payments.delete_many({"subscription_id": {"$in": sub_ids}})
+    # Also clear referral_rewards touching them
+    await db.referral_rewards.delete_many({"$or": [{"referrer_id": {"$in": victim_ids}}, {"referred_id": {"$in": victim_ids}}]})
+    # Clear referred_by pointing to deleted users
+    await db.users.update_many({"referred_by": {"$in": victim_ids}}, {"$set": {"referred_by": None}})
+    await log_admin_action(admin, "cleanup_test_users", "users", {"prefix": prefix, "deleted": user_delete.deleted_count})
+    return {"deleted_users": user_delete.deleted_count, "deleted_subscriptions": len(subs), "prefix": prefix}
+
+
+# ---------------- Referral / Analytics / Webhooks moved to routers/ ---------------- #
 app.include_router(api)
+
+# Register split routers (must be after `api` is defined but before add_middleware)
+from routers.analytics import router as analytics_router  # noqa: E402
+from routers.referral import router as referral_router  # noqa: E402
+from routers.webhooks import router as webhooks_router  # noqa: E402
+app.include_router(analytics_router, prefix="/api")
+app.include_router(referral_router, prefix="/api")
+app.include_router(webhooks_router, prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,
