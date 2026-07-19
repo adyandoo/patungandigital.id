@@ -124,10 +124,33 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - Testing: **18/18 iter10 backend tests PASS** + frontend smoke confirmed (Payment Config tab, Buat Admin modal, QRIS/Midtrans buttons all interactive).
 - **Not implemented** (deferred by user): WhatsApp / Twilio integration.
 
+## Iteration 11 (2026-02-19) — Bulk User Import/Export + Auto-Invoice Generator + Field Bounds
+- **P0: Bulk user import/export**:
+  - `GET /api/admin/users/template.csv` — downloads template with 6 columns (name, email, username, whatsapp, gender, password) + 2 sample rows.
+  - `POST /api/admin/users/import` — accepts `{file_base64, file_name}` (data URL or raw base64). Only `email` header is mandatory. Duplicate emails → `skipped[]`. Invalid emails → `errors[]`. Empty password → uses global default from `general_config`. Returns `{summary: {created, skipped, errors}}` for admin review.
+  - `GET/PUT /api/admin/general-config` — new settings key with `default_new_user_password` (default `patungan123`, min 6 chars).
+  - UI: Users tab now has three buttons: **Template CSV**, **Import CSV** (opens `ImportModal` with file picker + result panel showing per-row status), **Export CSV**. Password default is configurable in the new Auto Invoice tab.
+- **P1: Auto-invoice generator**:
+  - New `invoice_config` settings key: `{day_of_month(1-28), due_days(1-60), enabled}` with sensible defaults.
+  - `_run_invoice_generator` runs every scheduler tick (hourly); on the configured `day_of_month`, iterates active subs and inserts pending payments (idempotent per subscription+period_label). New payments carry `auto_generated=true`.
+  - `POST /api/admin/invoices/generate-now` — force trigger (ignores day-of-month gate but still idempotent). Perfect for onboarding new subs mid-month.
+  - `GET/PUT /api/admin/invoice-config` endpoints for admin UI.
+  - New **Auto Invoice** admin tab (`data-testid=admin-tab-auto-invoice`) with config form + manual **Generate invoice sekarang** button + default-password form.
+- **P4: Field bounds**:
+  - `midtrans_fee_percent` now bounded `Field(ge=0, le=100)` (422 on out-of-range).
+  - `invoice_config.day_of_month` bounded `1-28` (avoids Feb edge case).
+  - `invoice_config.due_days` bounded `1-60`.
+  - `general_config.default_new_user_password` min 6 chars.
+- **Deferred**: P2 (server.py refactor to `routers/payments.py` + `routers/settings.py`) — server.py now 1615 lines. P3 (object storage for base64 receipts + QRIS) — user chose to defer.
+- **Testing**: 22/22 iter11 backend tests PASS + frontend smoke confirmed (Auto Invoice tab renders, Users import modal displays 3/0/0 result panel + toast). No regressions.
+
 ## Backlog / next tasks
-- **P1 (deferred by user)**: Twilio credentials for live WhatsApp reminders.
-- **P2**: Extract payments/config endpoints into `routers/payments.py` + `routers/settings.py` — server.py now ~1413 lines.
-- **P2**: Move base64 receipts + QRIS image to object storage (currently embedded in Mongo).
-- **P2**: Add `Field(ge=0, le=100)` bound on `midtrans_fee_percent` and stricter integer-rounding rule (math.floor) to avoid banker's-rounding disputes.
-- **P3**: Free-month payment branch lacks targeted test — add coverage.
+- **P2**: Extract admin config endpoints (`invoice-config`, `general-config`, `payment-config`) into `routers/settings.py`; extract bulk-import + template into `routers/admin_users.py`. server.py is 1615 lines — well past the 700-line guideline.
+- **P3**: Migrate base64 receipts + QRIS image to Emergent Object Storage (deferred by user).
+- **P2**: Add filter `?auto_generated=true` to Payments list + bulk delete UI for ops recovery.
+- **P3**: Timezone-aware scheduling — currently uses UTC for `day_of_month` check; consider Jakarta time for Indonesian admin UX.
+- **P3**: Add `last_run_period_label` short-circuit so invoice generator doesn't rescan every hour on the trigger day.
+- **P3**: Sanitize pymongo exception strings in `import_users_csv.errors[]` before returning to UI.
+- **P1 (paused by user)**: Twilio credentials for live WhatsApp reminders.
+
 
