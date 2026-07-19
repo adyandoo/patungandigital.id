@@ -201,14 +201,35 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - **Navigation**: Navbar + footer now have Blog + Tentang links (data-testids `nav-blog`, `nav-about`, `footer-blog`, `footer-about`).
 - **Testing**: 20/20 iter14 backend tests PASS + all frontend flows 100% verified.
 
+## Iteration 15 (2026-02-19) — SEO + Sortable Tables + Auto-Assign Groups + Groups UX
+- **P1 SEO** (react-helmet-async):
+  - New `SEO` component sets `<title>`, `<meta name="description">`, Open Graph, Twitter Card, canonical, optional JSON-LD.
+  - Home, About, Blog list, Blog detail all wrapped. Blog post emits Article JSON-LD (`headline, datePublished, author, publisher, keywords, mainEntityOfPage`).
+  - Backend `GET /api/sitemap.xml` — dynamic sitemap listing `/`, `/about`, `/blog`, and every published post with `lastmod`. `GET /api/robots.txt` — allows `/`, disallows admin/dashboard/reset pages, points to sitemap.
+  - Removed stale `<meta description="A product of emergent.sh">` from `public/index.html` so Helmet's dynamic tag wins.
+- **P2 Sortable admin tables**: New `useSortableTable(rows, defaultKey, defaultDir, accessors)` hook + `<HeaderButton k="name" label="Nama" />`. Users tab table headers now clickable ASC↔DESC with visible arrow indicator. Numeric accessor for `referral_credit`.
+- **P3 Auto-assign group on payment paid**:
+  - New helper `auto_assign_group_for_sub(sub_id)` — invoked inside `extend_subscription_from_payment` when payment→paid.
+  - Logic: pick first active group (`status ∈ {active, None}`) with open slot for sub.role by `created_at ASC`. If none, auto-create new group inheriting `default_host_slots`/`default_regular_slots` from service. New group carries `auto_created:true`.
+  - Idempotent (checks `sub.group_id` before running).
+  - Role promotion validation: `PATCH /admin/subscriptions/{id}` with `role:'host'` now rejects (400) if target group already has an active host from a different subscription.
+- **P3 Unassigned users endpoint**: New `GET /api/admin/groups/unassigned-users?service_id=X` returns users NOT currently in any group for that service, with a `has_pending_sub` flag if they've already paid but await assignment. Used by the redesigned AssignModal.
+- **P4 Groups UX**:
+  - Redesigned Groups tab is now a service-grouped accordion (`groups-by-service`). Each service shows total slots utilization + per-service "Buat grup" button.
+  - Capacity bars use traffic-light color (green <75%, yellow 75-99%, red 100%).
+  - Group cards show `auto` badge when auto-created + inline member list with **promote/demote/remove** actions (`Crown` icon for host).
+  - AssignModal fetches only unassigned candidates, shows real-time slot counts per role, disables role radio when its slots are full.
+- **Testing**: 9/9 iter15 backend tests PASS + 100% frontend flows verified. One design bug (meta duplication) identified + fixed same iteration.
+
 ## Backlog / next tasks
-- **P2 (from iter13, still open)**: Extract `deps.py` + `models.py` + `routers/auth.py` + `routers/payments.py` (server.py grew back to 1826 lines with new models).
-- **P2 (from iter14 code review)**: Consolidate severity/target Pydantic validators (currently duplicated between defaults + manual 422). Move announcements dismissals to separate collection with compound index (`announcements.dismissed_by` can bloat for popular "all" broadcasts).
-- **P3**: Object Storage for base64 media (receipts, QRIS, profile pics, blog covers).
-- **P3**: Rate-limit other sensitive endpoints (login attempts, testimonial spam).
-- **P3**: Blog TOC + reading-time estimate + related posts by tag.
-- **P3**: Announcements email fan-out (SendGrid) for critical broadcasts.
-- **P4 (from iter14 review)**: SubscriptionsTab `<option>` inspector artifact — cosmetic dev-only, ignore.
+- **P2 (still open)**: Sort headers on Payments, Subscriptions, Services, Waitlist, Blog, Testimonials, Announcements tabs (only Users has it currently — pattern is ready via the shared hook).
+- **P2 (still open)**: Extract `deps.py` + `models.py` + `routers/auth.py` + `routers/payments.py` — server.py is 1908 lines.
+- **P3**: Object Storage for base64 media.
+- **P3**: Broadcast fan-out email (SendGrid) for critical announcements.
+- **P3**: Auto-refresh `applied_to_sub_at` guard ordering (write flag first, rollback on failure).
+- **P4 (new)**: Expose `default_host_slots` / `default_regular_slots` in Service create/edit modal so admins can tune what auto-created groups inherit.
+- **P4 (new)**: Bulk actions in Groups (e.g. pause all groups for a service).
+
 
 
 

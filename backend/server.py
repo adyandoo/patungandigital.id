@@ -261,8 +261,12 @@ async def auto_assign_group_for_sub(sub_id: str) -> Optional[str]:
     role = sub.get("role", "regular")
     if not service_id:
         return None
-    # Find first group with open slot for this role
-    groups = await db.groups.find({"service_id": service_id, "active": True}).sort("created_at", 1).to_list(None)
+    # Find first group with open slot for this role (skip paused/expired groups)
+    groups = await db.groups.find({
+        "service_id": service_id,
+        "active": True,
+        "$or": [{"status": {"$in": ["active", None]}}, {"status": {"$exists": False}}],
+    }).sort("created_at", 1).to_list(None)
     chosen = None
     for g in groups:
         gid = str(g["_id"])
@@ -346,8 +350,8 @@ async def extend_subscription_from_payment(payment_id: str):
     if not sub.get("group_id"):
         try:
             await auto_assign_group_for_sub(str(sub["_id"]))
-        except Exception as e:
-            logger.warning(f"auto-assign group failed: {e}")
+        except Exception:
+            logger.exception("auto-assign group failed")
     await db.payments.update_one(
         {"_id": ObjectId(payment_id)},
         {"$set": {"applied_to_sub_at": now.isoformat(), "duration_applied": duration}},
