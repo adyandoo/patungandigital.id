@@ -279,9 +279,14 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
   - Prizes: Top 1 → +1 `free_months_credit` (auto-applied on next payment). Top 2 & 3 → auto-generated Rp 15,000 voucher (60-day validity, targeted to user, source=`leaderboard_topN`).
   - Admin endpoints: `POST /api/admin/leaderboard/run-now` (force-run for testing), `GET /api/admin/leaderboard/state` (last run + winners).
 
+## Iteration 21 (2026-02-19) — CSS readability fix + Data cleanup + API cleanup
+- **P0a FIX — Font readability across app**: Root cause: `.brutal`, `.brutal-sm`, `.brutal-btn` (all variants), `.brutal-input`, `.pd-tag` in `index.css` were defined OUTSIDE `@layer components`, giving them higher specificity than Tailwind utility classes. Result: any element like `<div className="pd-tag bg-[#FFD60A]">` was rendered white-on-white (invisible) because `.pd-tag { background: #fff }` beat the Tailwind bg. Fixed by wrapping ALL brutalist utilities in `@layer components { ... }` block so Tailwind utilities (bg-[...], text-white, etc.) can override them. Also added explicit `color: var(--pd-ink)` to `.brutal`, `.brutal-input`, `.pd-tag` for deterministic text color. Verified via before/after screenshots: HEMAT badge and MASUK tag now show properly.
+- **P0b DATA CLEANUP**: Deleted all test users (164), subscriptions (101), payments (146), vouchers (18), groups, redemptions, tokens, referral_rewards, waitlist, testimonials, announcement_reads, notifications, reminders, admin_actions. Removed test admin `iter10_admin...`. **Final state**: 1 user (admin@patungandigital.id) + 3 services (Netflix Premium / Spotify Family / YouTube Premium).
+- **P1 CLEANUP — UploadReceiptInput**: Removed redundant `payment_id` field from body model. Endpoint `POST /api/me/payments/{payment_id}/receipt` now only needs `{file_base64, file_name}` in body. Frontend updated. Backward-compatible (extra field ignored). Tested: 17/17 backend tests PASS.
+
 ## Backlog / next tasks
-- **P2 (still open)**: Extract `routers/auth.py` — need full auth test suite as safety net first.
-- **P3 (P4 done)**: Notif admin (email) ketika user self-join subscription supaya admin cepat assign grup.
+- **P2 (still open)**: Extract `routers/auth.py` — server.py is 2469 lines, testing agent flagged as maintainability concern.
+- **P3 (still open)**: Notif email admin ketika user self-join subscription.
 - **P3**: Object Storage for base64 media.
 - **P3**: SendGrid fallback / dead-letter queue for failed verification emails (currently silent-fail).
 - **P3**: Bounce-detection for invalid emails so unverified users don't accumulate.
