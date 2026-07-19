@@ -95,6 +95,7 @@ export default function PaymentsTab() {
                 <td className="px-4 py-3">{p.period_label || "-"}</td>
                 <td className="px-4 py-3">
                   {rupiah(p.amount)}
+                  {p.free_month_applied && <div className="text-xs text-[#34C759] font-mono font-bold">FREE MONTH</div>}
                   {p.referral_credit_applied > 0 && <div className="text-xs text-[#34C759] font-mono">-{rupiah(p.referral_credit_applied)} ref</div>}
                 </td>
                 <td className="px-4 py-3">{p.due_date ? new Date(p.due_date).toLocaleDateString("id-ID") : "-"}</td>

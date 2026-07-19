@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import api, { rupiah, formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
-import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise, Gift, Copy, ShareNetwork } from "@phosphor-icons/react";
+import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise, Gift, Copy, ShareNetwork, Trophy, Medal } from "@phosphor-icons/react";
 
 export default function UserDashboard() {
   const { user, setUser } = useAuth();
@@ -247,7 +247,11 @@ function PasswordPanel() {
 
 function ReferralPanel() {
   const [stats, setStats] = useState(null);
-  useEffect(() => { api.get("/me/referral-stats").then((r) => setStats(r.data)); }, []);
+  const [board, setBoard] = useState(null);
+  useEffect(() => {
+    api.get("/me/referral-stats").then((r) => setStats(r.data));
+    api.get("/leaderboard").then((r) => setBoard(r.data));
+  }, []);
   if (!stats) return <div className="brutal p-8">Memuat...</div>;
 
   const shareText = `Halo! Yuk patungan langganan premium bareng di patungandigital.id. Pakai kode referralku *${stats.referral_code}* biar kita berdua dapat diskon Rp ${stats.reward_per_referral.toLocaleString("id-ID")}!`;
@@ -261,45 +265,126 @@ function ReferralPanel() {
     window.open(url, "_blank");
   };
 
+  const nextTier = stats.next_tier;
+  const progressPct = nextTier ? Math.min(100, Math.round((stats.successful_count / nextTier.referrals) * 100)) : 100;
+
   return (
-    <div className="grid md:grid-cols-3 gap-6" data-testid="referral-panel">
-      <div className="brutal p-8 md:col-span-2 bg-[#FFD60A]/30">
-        <div className="flex items-center gap-3">
-          <Gift weight="fill" size={32} />
-          <h3 className="font-display font-bold text-2xl">Kode referral kamu</h3>
+    <div className="space-y-6" data-testid="referral-panel">
+      <div className="grid md:grid-cols-3 gap-6">
+        <div className="brutal p-8 md:col-span-2 bg-[#FFD60A]/30">
+          <div className="flex items-center gap-3">
+            <Gift weight="fill" size={32} />
+            <h3 className="font-display font-bold text-2xl">Kode referral kamu</h3>
+          </div>
+          <p className="mt-2 text-gray-800">Ajak teman patungan. Setiap teman yang daftar & bayar pertama, kalian <b>berdua dapat diskon Rp {stats.reward_per_referral.toLocaleString("id-ID")}</b>. Ada bonus tier untuk yang paling rajin.</p>
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <div className="brutal-sm bg-white px-6 py-4 font-mono font-black text-3xl tracking-widest" data-testid="referral-code">{stats.referral_code}</div>
+            <button onClick={() => copy(stats.referral_code, "Kode disalin!")} className="brutal-btn brutal-btn-white" data-testid="referral-copy-code">
+              <Copy weight="bold" /> Salin kode
+            </button>
+            <button onClick={() => copy(shareLink, "Link disalin!")} className="brutal-btn brutal-btn-white" data-testid="referral-copy-link">
+              <Copy weight="bold" /> Salin link
+            </button>
+            <button onClick={shareWA} className="brutal-btn brutal-btn-green" data-testid="referral-share-wa">
+              <ShareNetwork weight="bold" /> Share ke WhatsApp
+            </button>
+          </div>
+          {stats.referred_by && (
+            <div className="mt-6 brutal-sm bg-white p-3 text-sm">Kamu diundang oleh <b>{stats.referred_by.name}</b>. Terima kasih! 🎉</div>
+          )}
         </div>
-        <p className="mt-2 text-gray-800">Ajak teman patungan. Setiap teman yang daftar & bayar pertama kalinya, <b>kamu & dia dapat diskon Rp {stats.reward_per_referral.toLocaleString("id-ID")}</b> di tagihan berikutnya.</p>
-        <div className="mt-6 flex flex-wrap items-center gap-3">
-          <div className="brutal-sm bg-white px-6 py-4 font-mono font-black text-3xl tracking-widest" data-testid="referral-code">{stats.referral_code}</div>
-          <button onClick={() => copy(stats.referral_code, "Kode disalin!")} className="brutal-btn brutal-btn-white" data-testid="referral-copy-code">
-            <Copy weight="bold" /> Salin kode
-          </button>
-          <button onClick={() => copy(shareLink, "Link disalin!")} className="brutal-btn brutal-btn-white" data-testid="referral-copy-link">
-            <Copy weight="bold" /> Salin link
-          </button>
-          <button onClick={shareWA} className="brutal-btn brutal-btn-green" data-testid="referral-share-wa">
-            <ShareNetwork weight="bold" /> Share ke WhatsApp
-          </button>
+        <div className="grid gap-4">
+          <div className="brutal p-5">
+            <div className="font-mono text-xs uppercase text-gray-600">Kredit tersedia</div>
+            <div className="font-display font-black text-3xl mt-1">{rupiah(stats.referral_credit)}</div>
+          </div>
+          <div className="brutal p-5 bg-[#34C759]/20">
+            <div className="font-mono text-xs uppercase text-gray-600">Bulan gratis</div>
+            <div className="font-display font-black text-3xl mt-1">{stats.free_months_credit || 0} bulan</div>
+            <div className="text-xs text-gray-600 mt-1">Otomatis dipakai untuk tagihan berikutnya.</div>
+          </div>
         </div>
-        {stats.referred_by && (
-          <div className="mt-6 brutal-sm bg-white p-3 text-sm">Kamu diundang oleh <b>{stats.referred_by.name}</b>. Terima kasih! 🎉</div>
+      </div>
+
+      {/* Tier progress */}
+      <div className="brutal p-6" data-testid="tier-progress">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <div className="font-display font-bold text-xl">Progress tier reward</div>
+            <div className="text-sm text-gray-600">Berhasil ajak: <b>{stats.successful_count}</b> teman (dari {stats.invited_count} yang daftar)</div>
+          </div>
+          {nextTier ? (
+            <div className="text-sm font-mono">Menuju <b>Tier {nextTier.tier}</b>: {stats.successful_count}/{nextTier.referrals} — <b>+{nextTier.free_months} bulan gratis</b></div>
+          ) : (
+            <div className="pd-tag bg-[#34C759] text-white">Semua tier terbuka! 🏆</div>
+          )}
+        </div>
+        {nextTier && (
+          <div className="mt-4 h-4 border-2 border-black bg-white relative overflow-hidden">
+            <div className="h-full bg-[#FFD60A]" style={{ width: `${progressPct}%` }}></div>
+          </div>
         )}
+        <div className="grid md:grid-cols-3 gap-3 mt-6">
+          {stats.tiers.map((t) => {
+            const unlocked = (stats.tiers_granted || []).includes(t.tier);
+            return (
+              <div key={t.tier} className={`brutal-sm p-4 ${unlocked ? "bg-[#34C759]/20" : "bg-white"}`}>
+                <div className="flex items-center gap-2">
+                  <Medal weight={unlocked ? "fill" : "duotone"} size={22} />
+                  <div className="font-display font-bold">Tier {t.tier}</div>
+                  {unlocked && <span className="pd-tag bg-[#34C759] text-white text-[10px]">terbuka</span>}
+                </div>
+                <div className="text-sm mt-2">{t.referrals} teman berhasil = <b>{t.free_months} bulan gratis</b></div>
+              </div>
+            );
+          })}
+        </div>
       </div>
-      <div className="grid gap-4">
-        <div className="brutal p-5">
-          <div className="font-mono text-xs uppercase text-gray-600">Kredit tersedia</div>
-          <div className="font-display font-black text-3xl mt-1">{rupiah(stats.referral_credit)}</div>
-          <div className="text-xs text-gray-600 mt-1">Otomatis dipotong dari tagihan berikutnya.</div>
+
+      {/* Leaderboard */}
+      {board && board.monthly.length > 0 && (
+        <div className="brutal p-6" data-testid="referral-leaderboard">
+          <div className="flex items-center gap-2 mb-4">
+            <Trophy weight="fill" size={26} />
+            <div>
+              <div className="font-display font-bold text-xl">Leaderboard bulan ini</div>
+              <div className="text-sm text-gray-600 font-mono">{board.month_label}</div>
+            </div>
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            <LeaderboardList title="Bulan ini" rows={board.monthly} />
+            <LeaderboardList title="All time" rows={board.all_time} />
+          </div>
         </div>
-        <div className="brutal p-5">
-          <div className="font-mono text-xs uppercase text-gray-600">Teman yang diajak</div>
-          <div className="font-display font-black text-3xl mt-1">{stats.invited_count}</div>
+      )}
+    </div>
+  );
+}
+
+function LeaderboardList({ title, rows }) {
+  return (
+    <div className="brutal-sm bg-white p-4">
+      <div className="font-display font-bold mb-3">{title}</div>
+      {rows.length === 0 ? (
+        <div className="text-sm text-gray-600">Belum ada.</div>
+      ) : (
+        <div className="space-y-2">
+          {rows.map((r) => (
+            <div key={r.user_id + r.rank} className="flex items-center justify-between border-b border-black/10 pb-2">
+              <div className="flex items-center gap-3">
+                <span className={`w-8 h-8 flex items-center justify-center font-mono font-black text-sm ${r.rank === 1 ? "bg-[#FFD60A] border-2 border-black" : r.rank === 2 ? "bg-white border-2 border-black" : r.rank === 3 ? "bg-[#FF3B30] text-white border-2 border-black" : "text-gray-600"}`}>
+                  {r.rank <= 3 ? <Medal weight="fill" /> : `#${r.rank}`}
+                </span>
+                <div>
+                  <div className="font-semibold text-sm">{r.name}</div>
+                  <div className="text-xs text-gray-600 font-mono">{r.count} teman</div>
+                </div>
+              </div>
+              <div className="text-right font-display font-black text-sm">{rupiah(r.total_earned)}</div>
+            </div>
+          ))}
         </div>
-        <div className="brutal p-5">
-          <div className="font-mono text-xs uppercase text-gray-600">Total reward earned</div>
-          <div className="font-display font-black text-3xl mt-1">{rupiah(stats.total_earned)}</div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

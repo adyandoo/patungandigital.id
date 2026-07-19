@@ -123,7 +123,39 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
-# ---------------- Referral ---------------- #
+# ---------------- Referral helpers ---------------- #
+TIER_THRESHOLDS = [
+    {"tier": 1, "referrals": 5, "free_months": 1, "label": "Tier 1"},
+    {"tier": 2, "referrals": 10, "free_months": 2, "label": "Tier 2"},   # cumulative 3 free months
+    {"tier": 3, "referrals": 25, "free_months": 5, "label": "Tier 3"},   # cumulative 8 free months
+]
+
+
+async def maybe_grant_tier_rewards(user_id: str):
+    user = await db.users.find_one({"_id": ObjectId(user_id)})
+    if not user:
+        return
+    successful_refs = await db.users.count_documents({"referred_by": user_id, "first_paid_at": {"$ne": None}})
+    granted: List[int] = user.get("tiers_granted", []) or []
+    for t in TIER_THRESHOLDS:
+        if successful_refs >= t["referrals"] and t["tier"] not in granted:
+            await db.users.update_one({"_id": user["_id"]}, {
+                "$inc": {"free_months_credit": t["free_months"]},
+                "$addToSet": {"tiers_granted": t["tier"]},
+            })
+            await db.referral_rewards.insert_one({
+                "referrer_id": user_id,
+                "referred_id": None,
+                "payment_id": None,
+                "type": f"tier_{t['tier']}",
+                "amount": 0,
+                "free_months": t["free_months"],
+                "created_at": now_utc(),
+            })
+            await log_admin_action(None, "referral_tier_granted", f"user:{user_id}",
+                                   {"tier": t["tier"], "free_months": t["free_months"], "referrals": successful_refs})
+
+
 def gen_referral_code() -> str:
     return secrets.token_urlsafe(6).replace("-", "").replace("_", "").upper()[:8]
 
@@ -167,11 +199,14 @@ async def apply_referral_rewards_if_first_paid(payment_id: str):
         "referrer_id": str(referrer["_id"]),
         "referred_id": str(referred_user["_id"]),
         "payment_id": payment_id,
+        "type": "cash",
         "amount": REFERRAL_REWARD,
         "created_at": now_utc(),
     })
     await log_admin_action(None, "referral_reward_credited", f"user:{referred_user['_id']}",
                            {"referrer": referrer.get("email"), "referred": referred_user.get("email"), "amount": REFERRAL_REWARD})
+    # Check tier rewards for the referrer
+    await maybe_grant_tier_rewards(str(referrer["_id"]))
 
 
 # ---------------- Midtrans helpers ---------------- #
@@ -774,7 +809,14 @@ async def admin_create_payment(input: PaymentInput, admin: dict = Depends(requir
     sub = await db.subscriptions.find_one({"_id": ObjectId(doc["subscription_id"])})
     payer = await db.users.find_one({"_id": ObjectId(sub["user_id"])}) if sub else None
     applied_credit = 0
-    if payer and payer.get("referral_credit", 0) > 0:
+    used_free_month = False
+    if payer and payer.get("free_months_credit", 0) > 0:
+        # Free month: amount → 0
+        doc["amount"] = 0
+        doc["free_month_applied"] = True
+        used_free_month = True
+        await db.users.update_one({"_id": payer["_id"]}, {"$inc": {"free_months_credit": -1}})
+    elif payer and payer.get("referral_credit", 0) > 0:
         applied_credit = min(int(payer["referral_credit"]), int(doc["amount"]))
         doc["amount"] = int(doc["amount"]) - applied_credit
         doc["referral_credit_applied"] = applied_credit
@@ -1147,22 +1189,66 @@ async def my_referral_stats(user: dict = Depends(get_current_user)):
     if not code:
         code = await ensure_referral_code(user["id"])
     invited = await db.users.count_documents({"referred_by": user["id"]})
+    successful = await db.users.count_documents({"referred_by": user["id"], "first_paid_at": {"$ne": None}})
     rewards = await db.referral_rewards.find({"referrer_id": user["id"]}).to_list(None)
-    total_earned = sum(r["amount"] for r in rewards)
+    total_earned = sum((r.get("amount") or 0) for r in rewards)
     referred_by_user = None
     if user.get("referred_by") and ObjectId.is_valid(user["referred_by"]):
         r = await db.users.find_one({"_id": ObjectId(user["referred_by"])})
         if r:
             referred_by_user = {"name": r.get("name"), "email": r.get("email")}
     fresh = await db.users.find_one({"_id": ObjectId(user["id"])})
+    granted = fresh.get("tiers_granted", []) or []
+    # Next tier progress
+    next_tier = next((t for t in TIER_THRESHOLDS if t["tier"] not in granted), None)
     return {
         "referral_code": code,
         "referral_credit": fresh.get("referral_credit", 0),
+        "free_months_credit": fresh.get("free_months_credit", 0),
         "invited_count": invited,
+        "successful_count": successful,
         "total_earned": total_earned,
         "reward_per_referral": REFERRAL_REWARD,
         "referred_by": referred_by_user,
+        "tiers": TIER_THRESHOLDS,
+        "tiers_granted": granted,
+        "next_tier": next_tier,
     }
+
+
+@api.get("/leaderboard")
+async def leaderboard():
+    """Public leaderboard: top referrers this month + all time."""
+    now = now_utc()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    async def rank(match_extra: dict):
+        pipeline = [
+            {"$match": {"referrer_id": {"$ne": None}, "referred_id": {"$ne": None}, **match_extra}},
+            {"$group": {"_id": "$referrer_id", "count": {"$sum": 1}, "total": {"$sum": "$amount"}}},
+            {"$sort": {"count": -1, "total": -1}},
+            {"$limit": 10},
+        ]
+        rows = await db.referral_rewards.aggregate(pipeline).to_list(None)
+        result = []
+        for i, r in enumerate(rows):
+            uref = await db.users.find_one({"_id": ObjectId(r["_id"])}) if ObjectId.is_valid(r["_id"]) else None
+            if not uref:
+                continue
+            result.append({
+                "rank": i + 1,
+                "user_id": r["_id"],
+                "name": uref.get("name") or "-",
+                "initials": "".join([p[0] for p in (uref.get("name") or "-").split()[:2]]).upper(),
+                "count": r["count"],
+                "total_earned": r["total"],
+                "tiers_granted": uref.get("tiers_granted", []) or [],
+            })
+        return result
+
+    monthly = await rank({"created_at": {"$gte": month_start}})
+    all_time = await rank({})
+    return {"monthly": monthly, "all_time": all_time, "month_label": now.strftime("%B %Y")}
 
 
 # ---------------- Xendit webhook ---------------- #

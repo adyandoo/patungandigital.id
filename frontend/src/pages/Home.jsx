@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import api, { rupiah } from "@/lib/api";
-import { UsersThree, Sparkle, ShieldCheck, CurrencyCircleDollar, ArrowRight } from "@phosphor-icons/react";
+import { UsersThree, Sparkle, ShieldCheck, CurrencyCircleDollar, ArrowRight, Gift, Trophy, Medal } from "@phosphor-icons/react";
 
 const HERO_IMG = "https://images.unsplash.com/photo-1714978444538-9097293e5b20?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwxfHxncm91cCUyMG9mJTIwZnJpZW5kcyUyMHdhdGNoaW5nJTIwdHYlMjBlbmpveWluZ3xlbnwwfHx8fDE3ODQzODA5MDF8MA&ixlib=rb-4.1.0&q=85";
 
 export default function Home() {
   const [services, setServices] = useState([]);
+  const [leaderboard, setLeaderboard] = useState(null);
 
   useEffect(() => {
     api.get("/services").then((r) => setServices(r.data)).catch(() => {});
+    api.get("/leaderboard").then((r) => setLeaderboard(r.data)).catch(() => {});
   }, []);
 
   return (
@@ -61,7 +63,7 @@ export default function Home() {
         <div className="grid md:grid-cols-3 divide-y-2 md:divide-y-0 md:divide-x-2 divide-black">
           <ValueProp icon={<UsersThree size={40} weight="duotone" />} title="Cukup 1 admin" desc="Kami yang urus akses, host, dan anggota di setiap layanan." />
           <ValueProp icon={<ShieldCheck size={40} weight="duotone" />} title="Langganan resmi" desc="Semua akun premium resmi dari penyedia layanan." />
-          <ValueProp icon={<CurrencyCircleDollar size={40} weight="duotone" />} title="Bayar mudah" desc="Payment gateway Xendit, tinggal upload bukti transfer." />
+          <ValueProp icon={<CurrencyCircleDollar size={40} weight="duotone" />} title="Bayar mudah" desc="Payment gateway Midtrans + upload bukti transfer manual." />
         </div>
       </section>
 
@@ -102,6 +104,66 @@ export default function Home() {
         </div>
       </section>
 
+      {/* Referral Banner */}
+      <section className="border-t-2 border-black bg-[#FFD60A] px-6 md:px-12 py-16" data-testid="referral-banner">
+        <div className="grid md:grid-cols-12 gap-8 items-center">
+          <div className="md:col-span-7">
+            <div className="flex items-center gap-3">
+              <Gift weight="fill" size={40} />
+              <span className="pd-tag bg-black text-white">Program Referral</span>
+            </div>
+            <h2 className="mt-4 font-display font-black text-4xl md:text-6xl leading-[0.95]">
+              Ajak teman.<br/>Kalian <span className="bg-white px-2 border-2 border-black">berdua dapat Rp 10.000</span>.
+            </h2>
+            <p className="mt-5 text-lg max-w-xl">
+              Share kode referralmu ke teman. Setiap teman yang daftar & bayar tagihan pertama, kalian berdua otomatis
+              dapat kredit Rp 10.000 yang langsung dipotong dari tagihan berikutnya.
+            </p>
+            <div className="mt-6 grid grid-cols-3 gap-3 max-w-lg">
+              <TierChip n="5" reward="1 bulan gratis" />
+              <TierChip n="10" reward="3 bulan gratis" />
+              <TierChip n="25" reward="8 bulan gratis" />
+            </div>
+            <Link to="/register" className="brutal-btn brutal-btn-red mt-8" data-testid="referral-banner-cta">
+              Mulai gabung <ArrowRight weight="bold" />
+            </Link>
+          </div>
+          <div className="md:col-span-5">
+            {leaderboard && leaderboard.monthly.length > 0 ? (
+              <div className="brutal bg-white p-6" data-testid="home-leaderboard">
+                <div className="flex items-center gap-2 mb-4">
+                  <Trophy weight="fill" size={24} />
+                  <div className="font-display font-bold text-xl">Top Referrer bulan ini</div>
+                </div>
+                <div className="space-y-2">
+                  {leaderboard.monthly.slice(0, 5).map((r) => (
+                    <div key={r.user_id + r.rank} className="flex items-center justify-between border-b border-black/10 pb-2">
+                      <div className="flex items-center gap-3">
+                        <span className={`w-8 h-8 flex items-center justify-center font-mono font-black text-sm ${r.rank === 1 ? "bg-[#FFD60A] border-2 border-black" : r.rank === 2 ? "bg-white border-2 border-black" : r.rank === 3 ? "bg-[#FF3B30] text-white border-2 border-black" : "text-gray-600"}`}>
+                          {r.rank <= 3 ? <Medal weight="fill" /> : `#${r.rank}`}
+                        </span>
+                        <div>
+                          <div className="font-semibold">{r.name}</div>
+                          <div className="text-xs text-gray-600 font-mono">{r.count} teman diajak</div>
+                        </div>
+                      </div>
+                      <div className="text-right font-display font-black">{rupiah(r.total_earned)}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="text-xs text-gray-600 mt-3 font-mono">{leaderboard.month_label}</div>
+              </div>
+            ) : (
+              <div className="brutal bg-white p-6 text-center">
+                <Trophy weight="duotone" size={40} className="mx-auto" />
+                <div className="font-display font-bold text-xl mt-3">Jadi #1 bulan ini</div>
+                <div className="text-sm text-gray-700 mt-2">Belum ada yang mulai — kesempatanmu jadi juara pertama!</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
       {/* How it works */}
       <section className="border-t-2 border-black bg-[#0A0A0A] text-white px-6 md:px-12 py-20">
         <span className="pd-tag bg-[#FFD60A] text-black">Cara kerja</span>
@@ -109,7 +171,7 @@ export default function Home() {
         <div className="grid md:grid-cols-3 gap-8 mt-12">
           {[
             { n: "01", t: "Daftar akun", d: "Buat akun di patungandigital.id — gratis, cukup email & WhatsApp." },
-            { n: "02", t: "Pilih & bayar", d: "Admin menempatkanmu ke grup layanan. Bayar via Xendit atau transfer." },
+            { n: "02", t: "Pilih & bayar", d: "Admin menempatkanmu ke grup layanan. Bayar via Midtrans atau transfer manual." },
             { n: "03", t: "Nikmati premium", d: "Terima kredensial layanan. Selesai." },
           ].map((s) => (
             <div key={s.n} className="border-2 border-white p-6" data-testid={`how-${s.n}`}>
@@ -146,6 +208,16 @@ function ValueProp({ icon, title, desc }) {
       </div>
       <h3 className="font-display font-bold text-2xl mt-4">{title}</h3>
       <p className="mt-2 text-gray-700">{desc}</p>
+    </div>
+  );
+}
+
+function TierChip({ n, reward }) {
+  return (
+    <div className="brutal-sm bg-white p-3 text-center">
+      <div className="font-display font-black text-2xl">{n}</div>
+      <div className="text-[10px] text-gray-700 uppercase font-mono">teman</div>
+      <div className="text-xs font-semibold mt-1">{reward}</div>
     </div>
   );
 }
