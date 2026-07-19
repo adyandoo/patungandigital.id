@@ -1,0 +1,46 @@
+{
+  "summary": "Iter8 full-stack verification. All 6 requested backend feature groups pass (10/10 iter8 tests). Full regression 97/97 (previous 87 + 10 new). Router extraction to routers/groups.py caused ZERO regressions — all previous /admin/groups, /me/groups, /public/availability, /waitlist, /admin/waitlist endpoints work identically. NEW endpoints verified: GET /api/admin/groups/suggest (returns groups w/ open slots, excludes paused/full), PATCH /api/admin/waitlist/{id} (status=contacted persists). Group status + expires_at accepted on create/patch. H-7 scheduler correctly (a) reports expiring_groups >=1, (b) sets expiry_reminder_sent=True, (c) logs group_expiry_reminder admin action, (d) idempotent on second run (0 additional). E2E Netflix group flow works: 2 users (host+regular) both see same credential email/password via /me/groups, is_me flag correct, members count=2. Frontend: [admin-tab-waitlist] tab visible with [waitlist-table] populated with 3 rows, each with [waitlist-contact-<id>] and [waitlist-delete-<id>]. GroupsTab modal has [gm-status] dropdown and [gm-expires] date input. SubscriptionsTab modal calls /admin/groups/suggest on service change; [submod-group] dropdown populates correctly OR shows red empty-state hint 'Semua group untuk service ini penuh...' when no available groups (verified via Netflix with no groups). FIXED during test: GET /api/admin/subscriptions was returning 500 due to legacy orphan sub with user_id='0' (invalid ObjectId) — added ObjectId.is_valid guard.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/admin/subscriptions", "issue": "Was 500 due to un-guarded ObjectId(s['user_id']) when a legacy sub had user_id='0'. FIXED in this iteration by wrapping with ObjectId.is_valid(). Recommend also guarding all other admin_list endpoints similarly and adding a data-integrity cleanup."},
+      {"endpoint": "PATCH /api/admin/subscriptions/{id}", "issue": "Still requires full SubscriptionInput body (replace semantics). Frontend GroupsTab.assign uses PATCH with only group_id → would 422. Verify how frontend assign flow builds payload (may need to load existing sub then merge). Iter7 note stands."},
+      {"endpoint": "GET /api/admin/groups/suggest", "issue": "Filters by g['active']=True AND status in ['active',null]. If a group was created without 'active' field pre-iter7, they will be excluded. Non-blocking but be aware for legacy data."},
+      {"endpoint": "GET /api/public/availability", "issue": "iter7 finding still applies (filled_slots now correctly filters group_id != null after iter7 fix — verified works)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "SubscriptionsTab role select", "issue": "Missing data-testid='submod-role' on the role <select> at line 119 — makes role-based E2E testing harder", "selector": "form select[value=form.role]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter8.py",
+    "/app/test_reports/pytest/iter8.xml",
+    "/app/test_reports/pytest/iter8_all.xml"
+  ],
+  "action_items": [
+    "MINOR: Add data-testid='submod-role' to role dropdown in SubscriptionsTab.jsx",
+    "MINOR: Consider hardening admin_list_subs style guards across other admin endpoints (users/payments) to prevent 500s on data corruption",
+    "MINOR: Investigate one orphan sub (user_id='0') in DB — consider migration/cleanup"
+  ],
+  "critical_code_review_comments": [
+    "routers/groups.py cleanly extracts 12 endpoints. Import-from-server pattern works because server.py exports symbols and mounts the router. Circular import avoided.",
+    "H-7 scheduler tick correctly filters {expires_at: {$ne: null, $lte: now+7d, $gte: now}, status:'active', expiry_reminder_sent:{$ne: True}} and marks flag idempotent — verified via test.",
+    "admin_list_subs 500 bug (fixed by test agent) shows lack of defensive ObjectId validation; recommend consistent pattern across all list endpoints.",
+    "PATCH /admin/subscriptions still uses full SubscriptionInput (replace not partial). Frontend must send full payload — confirm any callers still work."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (guarded ObjectId in admin_list_subs)",
+    "/app/backend/tests/test_iter8.py (new — 10 tests)"
+  ],
+  "success_rate": {"backend": "100% (10/10 iter8 tests, 97/97 full regression)", "frontend": "100% — waitlist tab + rows + actions present, GroupsTab modal has status/expires fields, SubscriptionsTab suggest integration works with correct empty-state hint"},
+  "test_credentials": "admin@patungandigital.id / admin123",
+  "seed_data_creation": "Test users prefix 'iter8_' + groups 'Iter8_*'. Cleaned up via POST /api/admin/cleanup-test-users?prefix=iter8 at session teardown. All Iter8_* groups deleted in try/finally.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter8 fully verified. Backend suite now 97 tests. Run: `REACT_APP_BACKEND_URL=<url> pytest backend/tests/ -o addopts='' -p no:xdist`. Iter8 module: `pytest backend/tests/test_iter8.py`. One backend fix applied (admin_list_subs ObjectId guard). Legacy orphan sub (user_id='0') still exists in DB — recommend cleanup. Twilio still MOCKED.",
+  "rca of the issue": "GET /api/admin/subscriptions was 500-ing because ONE legacy subscription had user_id='0' (not a valid 24-char hex ObjectId). Root cause: admin_list_subs called ObjectId(s['user_id']) without validation, letting bson raise InvalidId which was not caught. Reproduction: `curl -b <admin_cookie> /api/admin/subscriptions` → 500. Fix applied: wrapped both user and service ObjectId calls with `ObjectId.is_valid(...)` guard, mirroring the pattern used elsewhere (e.g., my_groups). Post-fix: endpoint returns 111 subs, 1 has user=null. Test passes."
+}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
-import { Users, PaperPlaneTilt, Receipt, Storefront, Ticket, GearSix, ClockCounterClockwise, UsersThree } from "@phosphor-icons/react";
+import { Users, PaperPlaneTilt, Receipt, Storefront, Ticket, GearSix, ClockCounterClockwise, UsersThree, Clock } from "@phosphor-icons/react";
 import OverviewTab from "./admin/OverviewTab";
 import UsersTab from "./admin/UsersTab";
 import ServicesTab from "./admin/ServicesTab";
@@ -9,6 +9,7 @@ import GroupsTab from "./admin/GroupsTab";
 import PaymentsTab from "./admin/PaymentsTab";
 import ReminderTab from "./admin/ReminderTab";
 import ActivityTab from "./admin/ActivityTab";
+import WaitlistTab from "./admin/WaitlistTab";
 
 const TABS = [
   { id: "overview", label: "Overview", icon: <GearSix weight="duotone" />, Comp: OverviewTab },
@@ -17,6 +18,7 @@ const TABS = [
   { id: "subscriptions", label: "Subscriptions", icon: <Ticket weight="duotone" />, Comp: SubscriptionsTab },
   { id: "groups", label: "Groups", icon: <UsersThree weight="duotone" />, Comp: GroupsTab },
   { id: "payments", label: "Payments", icon: <Receipt weight="duotone" />, Comp: PaymentsTab },
+  { id: "waitlist", label: "Waitlist", icon: <Clock weight="duotone" />, Comp: WaitlistTab },
   { id: "reminder", label: "Reminder", icon: <PaperPlaneTilt weight="duotone" />, Comp: ReminderTab },
   { id: "activity", label: "Activity", icon: <ClockCounterClockwise weight="duotone" />, Comp: ActivityTab },
 ];

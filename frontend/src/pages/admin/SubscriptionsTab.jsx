@@ -43,7 +43,7 @@ export default function SubscriptionsTab() {
       <div className="brutal overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-black text-white">
-            <tr>{["User", "Service", "Role", "Mulai", "Harga", "Status", "Aksi"].map((h) => <th key={h} className="text-left px-4 py-3 font-mono uppercase text-xs">{h}</th>)}</tr>
+            <tr>{["User", "Service", "Role", "Group", "Mulai", "Harga", "Status", "Aksi"].map((h) => <th key={h} className="text-left px-4 py-3 font-mono uppercase text-xs">{h}</th>)}</tr>
           </thead>
           <tbody data-testid="subs-table">
             {filtered.map((s) => (
@@ -51,6 +51,7 @@ export default function SubscriptionsTab() {
                 <td className="px-4 py-3 font-semibold">{s.user?.name || "?"}</td>
                 <td className="px-4 py-3">{s.service?.name}</td>
                 <td className="px-4 py-3"><span className="pd-tag">{s.role}</span></td>
+                <td className="px-4 py-3 font-mono text-xs">{s.group_id ? s.group_id.slice(-6) : "-"}</td>
                 <td className="px-4 py-3">{s.start_date ? new Date(s.start_date).toLocaleDateString("id-ID") : "-"}</td>
                 <td className="px-4 py-3">{rupiah(s.price)}</td>
                 <td className="px-4 py-3"><span className="pd-tag">{s.status}</span></td>
@@ -60,7 +61,7 @@ export default function SubscriptionsTab() {
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-600">Tidak ada hasil.</td></tr>
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-600">Tidak ada hasil.</td></tr>
             )}
           </tbody>
         </table>
@@ -72,15 +73,25 @@ export default function SubscriptionsTab() {
 
 function SubModal({ users, services, onClose, onSaved }) {
   const [form, setForm] = useState({
-    user_id: "", service_id: "", role: "regular",
+    user_id: "", service_id: "", role: "regular", group_id: "",
     start_date: new Date().toISOString().slice(0, 10),
     end_date: "", price: 0, status: "active",
   });
+  const [suggested, setSuggested] = useState([]);
+
+  useEffect(() => {
+    if (!form.service_id) { setSuggested([]); return; }
+    api.get(`/admin/groups/suggest?service_id=${form.service_id}&role=${form.role}`)
+      .then((r) => setSuggested(r.data))
+      .catch(() => setSuggested([]));
+  }, [form.service_id, form.role]);
+
   const save = async (e) => {
     e.preventDefault();
     try {
       const payload = {
         ...form, price: Number(form.price),
+        group_id: form.group_id || null,
         start_date: new Date(form.start_date).toISOString(),
         end_date: form.end_date ? new Date(form.end_date).toISOString() : null,
       };
@@ -98,7 +109,7 @@ function SubModal({ users, services, onClose, onSaved }) {
           </select>
         </F>
         <F label="Service">
-          <select required className="brutal-input" value={form.service_id} onChange={(e) => { const svc = services.find((s) => s.id === e.target.value); setForm({ ...form, service_id: e.target.value, price: svc?.price_regular || 0 }); }} data-testid="submod-service">
+          <select required className="brutal-input" value={form.service_id} onChange={(e) => { const svc = services.find((s) => s.id === e.target.value); setForm({ ...form, service_id: e.target.value, price: svc?.price_regular || 0, group_id: "" }); }} data-testid="submod-service">
             <option value="">Pilih service...</option>
             {services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
@@ -110,6 +121,21 @@ function SubModal({ users, services, onClose, onSaved }) {
             </select>
           </F>
           <F label="Harga (Rp)"><input type="number" className="brutal-input" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} /></F>
+        </div>
+        <F label="Assign ke group (opsional)">
+          <select className="brutal-input" value={form.group_id} onChange={(e) => setForm({ ...form, group_id: e.target.value })} data-testid="submod-group">
+            <option value="">— Tidak sekarang (assign nanti dari tab Groups) —</option>
+            {suggested.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name} — {g.filled_regular}/{g.regular_slots} reg, {g.filled_host}/{g.host_slots} host — {g.available_for_role} slot {form.role} tersedia
+              </option>
+            ))}
+          </select>
+          {form.service_id && suggested.length === 0 && (
+            <div className="text-xs text-[#FF3B30] mt-1 font-mono">Semua group untuk service ini penuh untuk role {form.role}. Buat group baru dulu di tab Groups.</div>
+          )}
+        </F>
+        <div className="grid grid-cols-2 gap-3">
           <F label="Mulai"><input type="date" className="brutal-input" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} /></F>
           <F label="Sampai (opsional)"><input type="date" className="brutal-input" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} /></F>
         </div>

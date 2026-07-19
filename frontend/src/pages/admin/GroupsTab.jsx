@@ -63,6 +63,10 @@ export default function GroupsTab() {
                 <div>
                   <div className="pd-tag" style={{ background: svc?.color, color: "#fff", borderColor: "#000" }}>{svc?.name || "?"}</div>
                   <div className="font-display font-bold text-xl mt-2">{g.name}</div>
+                  <div className="mt-1 flex items-center gap-1 flex-wrap">
+                    <span className={`pd-tag text-[10px] ${g.status === "paused" ? "bg-[#FFD60A]" : g.status === "expired" ? "bg-[#FF3B30] text-white" : "bg-[#34C759] text-white"}`}>{g.status || "active"}</span>
+                    {g.expires_at && <span className="pd-tag text-[10px] bg-white">exp {new Date(g.expires_at).toLocaleDateString("id-ID", {day:"numeric",month:"short"})}</span>}
+                  </div>
                 </div>
                 <div className="flex gap-1">
                   <button onClick={() => { setEditing(g); setShowModal(true); }} data-testid={`group-edit-${g.id}`} className="brutal-sm p-2 bg-[#007AFF] text-white"><PencilSimple weight="bold" /></button>
@@ -134,12 +138,19 @@ function GroupModal({ group, services, onClose, onSaved }) {
     host_slots: group?.host_slots ?? 1,
     regular_slots: group?.regular_slots ?? 4,
     notes: group?.notes || "",
+    status: group?.status || "active",
+    expires_at: group?.expires_at ? String(group.expires_at).slice(0, 10) : "",
     active: group?.active !== false,
   });
   const save = async (e) => {
     e.preventDefault();
     try {
-      const payload = { ...form, host_slots: Number(form.host_slots), regular_slots: Number(form.regular_slots) };
+      const payload = {
+        ...form,
+        host_slots: Number(form.host_slots),
+        regular_slots: Number(form.regular_slots),
+        expires_at: form.expires_at ? new Date(form.expires_at).toISOString() : null,
+      };
       if (group) await api.patch(`/admin/groups/${group.id}`, payload);
       else await api.post("/admin/groups", payload);
       toast.success("Group tersimpan"); onSaved();
@@ -160,7 +171,17 @@ function GroupModal({ group, services, onClose, onSaved }) {
           <F label="Regular slots"><input type="number" min="0" className="brutal-input" value={form.regular_slots} onChange={(e) => setForm({ ...form, regular_slots: e.target.value })} /></F>
         </div>
         <F label="Notes (opsional)"><textarea rows="2" className="brutal-input" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></F>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} /> Aktif</label>
+        <div className="grid grid-cols-2 gap-3">
+          <F label="Status">
+            <select className="brutal-input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} data-testid="gm-status">
+              <option value="active">Active</option>
+              <option value="paused">Paused</option>
+              <option value="expired">Expired</option>
+            </select>
+          </F>
+          <F label="Berakhir pada (opsional)"><input type="date" className="brutal-input" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} data-testid="gm-expires" /></F>
+        </div>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} /> Aktif (tampil di public availability)</label>
         <button type="submit" className="brutal-btn brutal-btn-red" data-testid="gm-save">Simpan</button>
       </form>
     </Modal>

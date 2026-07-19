@@ -368,6 +368,8 @@ class GroupInput(BaseModel):
     regular_slots: int = 4
     notes: Optional[str] = ""
     active: bool = True
+    status: Optional[str] = "active"  # active | paused | expired
+    expires_at: Optional[datetime] = None
 
 
 class CredentialInput(BaseModel):
@@ -448,8 +450,21 @@ async def _run_due_reminders(actor: Optional[dict] = None) -> dict:
             sent.append({"payment_id": str(p["_id"]), **{k: r.get(k) for k in ("email_sent", "whatsapp_sent", "mocked")}})
         except Exception as e:
             logger.warning(f"scheduler send failed for {p['_id']}: {e}")
-    await log_admin_action(actor, "scheduler_run", "reminders", {"count": len(sent), "days_before_due": days})
-    return {"count": len(sent), "sent": sent}
+    # H-7 admin group expiry reminders (log-only for now)
+    expiring_threshold = now + timedelta(days=7)
+    expiring_soon = await db.groups.find({
+        "expires_at": {"$ne": None, "$lte": expiring_threshold, "$gte": now},
+        "status": "active",
+        "expiry_reminder_sent": {"$ne": True},
+    }).to_list(None)
+    for g in expiring_soon:
+        await db.groups.update_one({"_id": g["_id"]}, {"$set": {"expiry_reminder_sent": True}})
+        await log_admin_action(None, "group_expiry_reminder", f"group:{g['_id']}", {
+            "name": g.get("name"), "expires_at": str(g.get("expires_at")),
+        })
+        logger.info(f"[ADMIN NOTICE] Group {g.get('name')} akan expired {g.get('expires_at')} — waktunya perpanjang.")
+    await log_admin_action(actor, "scheduler_run", "reminders", {"count": len(sent), "days_before_due": days, "expiring_groups": len(expiring_soon)})
+    return {"count": len(sent), "sent": sent, "expiring_groups": len(expiring_soon)}
 
 
 @asynccontextmanager
@@ -760,9 +775,9 @@ async def admin_list_subs(admin: dict = Depends(require_admin)):
     subs = await db.subscriptions.find({}).to_list(None)
     for s in subs:
         s["id"] = oid(s.pop("_id"))
-        u = await db.users.find_one({"_id": ObjectId(s["user_id"])})
+        u = await db.users.find_one({"_id": ObjectId(s["user_id"])}) if ObjectId.is_valid(s.get("user_id") or "") else None
         s["user"] = user_out(u) if u else None
-        svc = await db.services.find_one({"_id": ObjectId(s["service_id"])})
+        svc = await db.services.find_one({"_id": ObjectId(s["service_id"])}) if ObjectId.is_valid(s.get("service_id") or "") else None
         if svc:
             svc["id"] = oid(svc.pop("_id"))
             s["service"] = svc
@@ -1222,172 +1237,10 @@ async def cleanup_test_users(admin: dict = Depends(require_admin), prefix: str =
     return {"deleted_users": user_delete.deleted_count, "deleted_subscriptions": len(subs), "prefix": prefix}
 
 
-# ---------------- Admin: Groups ---------------- #
-@api.get("/admin/groups")
-async def admin_list_groups(admin: dict = Depends(require_admin), service_id: Optional[str] = None):
-    q = {"service_id": service_id} if service_id else {}
-    groups = await db.groups.find(q).to_list(None)
-    for g in groups:
-        g["id"] = oid(g.pop("_id"))
-        # Attach members from subscriptions
-        subs = await db.subscriptions.find({"group_id": g["id"]}).to_list(None)
-        members = []
-        for s in subs:
-            u = await db.users.find_one({"_id": ObjectId(s["user_id"])}) if ObjectId.is_valid(s["user_id"]) else None
-            members.append({"subscription_id": str(s["_id"]), "user_id": s["user_id"], "role": s.get("role"), "name": (u or {}).get("name"), "email": (u or {}).get("email"), "status": s.get("status")})
-        g["members"] = members
-        host_count = sum(1 for m in members if m["role"] == "host" and m["status"] == "active")
-        reg_count = sum(1 for m in members if m["role"] == "regular" and m["status"] == "active")
-        g["filled_host"] = host_count
-        g["filled_regular"] = reg_count
-        g["credential"] = await db.group_credentials.find_one({"group_id": g["id"]}, {"password": 0}) or None
-        if g["credential"]:
-            g["credential"]["id"] = oid(g["credential"].pop("_id"))
-    return groups
+# ---------------- Groups / Waitlist / Availability moved to routers/groups.py ---------------- #
 
 
-@api.post("/admin/groups")
-async def admin_create_group(input: GroupInput, admin: dict = Depends(require_admin)):
-    doc = input.model_dump()
-    doc["created_at"] = now_utc().isoformat()
-    result = await db.groups.insert_one(doc)
-    doc["id"] = oid(result.inserted_id)
-    doc.pop("_id", None)
-    await log_admin_action(admin, "create_group", f"group:{doc['id']}", {"name": input.name, "service_id": input.service_id})
-    return doc
-
-
-@api.patch("/admin/groups/{group_id}")
-async def admin_update_group(group_id: str, input: GroupInput, admin: dict = Depends(require_admin)):
-    await db.groups.update_one({"_id": ObjectId(group_id)}, {"$set": input.model_dump()})
-    g = await db.groups.find_one({"_id": ObjectId(group_id)})
-    g["id"] = oid(g.pop("_id"))
-    return g
-
-
-@api.delete("/admin/groups/{group_id}")
-async def admin_delete_group(group_id: str, admin: dict = Depends(require_admin)):
-    await db.groups.delete_one({"_id": ObjectId(group_id)})
-    await db.group_credentials.delete_many({"group_id": group_id})
-    await db.subscriptions.update_many({"group_id": group_id}, {"$set": {"group_id": None}})
-    await log_admin_action(admin, "delete_group", f"group:{group_id}")
-    return {"ok": True}
-
-
-# ---------------- Admin: Group credentials ---------------- #
-@api.get("/admin/groups/{group_id}/credential")
-async def admin_get_credential(group_id: str, admin: dict = Depends(require_admin)):
-    c = await db.group_credentials.find_one({"group_id": group_id})
-    if not c:
-        return None
-    c["id"] = oid(c.pop("_id"))
-    return c
-
-
-@api.put("/admin/groups/{group_id}/credential")
-async def admin_set_credential(group_id: str, input: CredentialInput, admin: dict = Depends(require_admin)):
-    doc = {**input.model_dump(), "group_id": group_id, "updated_at": now_utc().isoformat()}
-    await db.group_credentials.update_one({"group_id": group_id}, {"$set": doc}, upsert=True)
-    await log_admin_action(admin, "set_group_credential", f"group:{group_id}", {"email": input.email})
-    c = await db.group_credentials.find_one({"group_id": group_id})
-    c["id"] = oid(c.pop("_id"))
-    return c
-
-
-@api.delete("/admin/groups/{group_id}/credential")
-async def admin_delete_credential(group_id: str, admin: dict = Depends(require_admin)):
-    await db.group_credentials.delete_one({"group_id": group_id})
-    await log_admin_action(admin, "delete_group_credential", f"group:{group_id}")
-    return {"ok": True}
-
-
-# ---------------- User: My groups & credentials ---------------- #
-@api.get("/me/groups")
-async def my_groups(user: dict = Depends(get_current_user)):
-    subs = await db.subscriptions.find({"user_id": user["id"], "group_id": {"$ne": None}}).to_list(None)
-    result = []
-    for s in subs:
-        g = await db.groups.find_one({"_id": ObjectId(s["group_id"])}) if ObjectId.is_valid(s.get("group_id") or "") else None
-        if not g:
-            continue
-        svc = await db.services.find_one({"_id": ObjectId(g["service_id"])}) if ObjectId.is_valid(g.get("service_id") or "") else None
-        # Fetch members
-        members_subs = await db.subscriptions.find({"group_id": str(g["_id"]), "status": "active"}).to_list(None)
-        members = []
-        for m in members_subs:
-            mu = await db.users.find_one({"_id": ObjectId(m["user_id"])}) if ObjectId.is_valid(m["user_id"]) else None
-            members.append({"name": (mu or {}).get("name"), "role": m.get("role"), "is_me": m["user_id"] == user["id"]})
-        cred = await db.group_credentials.find_one({"group_id": str(g["_id"])})
-        if cred:
-            cred["id"] = oid(cred.pop("_id"))
-        result.append({
-            "group": {"id": str(g["_id"]), "name": g["name"], "notes": g.get("notes"), "host_slots": g["host_slots"], "regular_slots": g["regular_slots"]},
-            "service": {"id": str(svc["_id"]), "name": svc["name"], "slug": svc["slug"], "color": svc.get("color"), "logo_url": svc.get("logo_url")} if svc else None,
-            "role": s.get("role"),
-            "start_date": s.get("start_date"),
-            "members": members,
-            "credential": cred,
-        })
-    return result
-
-
-# ---------------- Public: Service availability ---------------- #
-@api.get("/public/availability")
-async def services_availability():
-    """Aggregated per-service slot availability + waitlist status. Public."""
-    services = await db.services.find({"active": True}).to_list(None)
-    out = []
-    for s in services:
-        sid = str(s["_id"])
-        groups = await db.groups.find({"service_id": sid, "active": True}).to_list(None)
-        total_host = sum(g["host_slots"] for g in groups)
-        total_reg = sum(g["regular_slots"] for g in groups)
-        # Filled = only subs that have been assigned to a group (real slot allocation)
-        subs = await db.subscriptions.find({"service_id": sid, "status": "active", "group_id": {"$ne": None, "$exists": True}}).to_list(None)
-        filled_host = sum(1 for x in subs if x.get("role") == "host")
-        filled_reg = sum(1 for x in subs if x.get("role") == "regular")
-        total_slots = total_host + total_reg
-        filled_slots = min(filled_host + filled_reg, total_slots)
-        available = max(0, total_slots - filled_slots)
-        out.append({
-            "service_id": sid,
-            "slug": s["slug"],
-            "name": s["name"],
-            "total_slots": total_slots,
-            "filled_slots": filled_slots,
-            "available_slots": available,
-            "groups": len(groups),
-            "has_availability": available > 0,
-        })
-    return out
-
-
-# ---------------- Waitlist ---------------- #
-@api.post("/waitlist")
-async def waitlist_join(input: WaitlistInput):
-    doc = input.model_dump()
-    doc["created_at"] = now_utc()
-    doc["status"] = "new"
-    await db.waitlist.insert_one(doc)
-    return {"ok": True}
-
-
-@api.get("/admin/waitlist")
-async def admin_list_waitlist(admin: dict = Depends(require_admin)):
-    entries = await db.waitlist.find({}).sort("created_at", -1).to_list(None)
-    for e in entries:
-        e["id"] = oid(e.pop("_id"))
-        svc = await db.services.find_one({"_id": ObjectId(e["service_id"])}) if ObjectId.is_valid(e.get("service_id") or "") else None
-        e["service_name"] = (svc or {}).get("name")
-    return entries
-
-
-@api.delete("/admin/waitlist/{entry_id}")
-async def admin_delete_waitlist(entry_id: str, admin: dict = Depends(require_admin)):
-    await db.waitlist.delete_one({"_id": ObjectId(entry_id)})
-    return {"ok": True}
-
-
+# ---------------- Referral / Analytics / Webhooks moved to routers/ ---------------- #
 # ---------------- Referral / Analytics / Webhooks moved to routers/ ---------------- #
 app.include_router(api)
 
@@ -1395,9 +1248,11 @@ app.include_router(api)
 from routers.analytics import router as analytics_router  # noqa: E402
 from routers.referral import router as referral_router  # noqa: E402
 from routers.webhooks import router as webhooks_router  # noqa: E402
+from routers.groups import router as groups_router  # noqa: E402
 app.include_router(analytics_router, prefix="/api")
 app.include_router(referral_router, prefix="/api")
 app.include_router(webhooks_router, prefix="/api")
+app.include_router(groups_router, prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,
