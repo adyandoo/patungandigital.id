@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 4 verified end-to-end. All 55 backend pytest tests PASS (45 from iter1-3 + 10 new iter4 covering: referral registration with/without code, referral reward flow with idempotency, referral credit auto-application on next payment, Midtrans webhook signature validation (valid/invalid), unknown order_id handling, settlement→paid transition, analytics $lookup structure). Frontend: Register page ?ref=CODE query param autofills [data-testid=reg-referral] uppercase correctly. UserDashboard [data-testid=tab-referral] renders ReferralPanel with 8-char code, copy/share buttons all present. AdminDashboard split into per-tab modules — all 7 tabs (overview/users/services/subscriptions/payments/reminder/activity) clickable and mount their content correctly with data-testids intact. Midtrans Snap best-effort call works (endpoint returns midtrans_token+midtrans_redirect_url when sandbox responds; endpoint does NOT crash if it fails).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/admin/analytics", "issue": "monthly array returns 13 entries (last 12 months + current partial) instead of 12 as stated in requirements — cosmetic; frontend chart handles it fine"}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter4.py",
+    "/app/backend/tests/test_iter3.py",
+    "/app/backend/tests/test_admin_v2.py",
+    "/app/backend/tests/backend_test.py"
+  ],
+  "action_items": [
+    "(Optional) Decide monthly analytics length semantics — either return exactly 12 rolling months or update spec to '13 including current'.",
+    "(Carry-over) SendGrid/Twilio still MOCKED — supply keys to enable real notifications.",
+    "(Carry-over) Midtrans SANDBOX keys — verify with real sandbox account for e2e Snap invoice creation; endpoint gracefully handles failure."
+  ],
+  "critical_code_review_comments": [
+    "admin_create_payment applies referral credit BEFORE Midtrans Snap creation — correct order (Snap gets discounted amount). Good.",
+    "apply_referral_rewards_if_first_paid uses first_paid_at flag on referred user for idempotency — verified in tests, no double credit on 2nd payment paid.",
+    "Midtrans webhook: signature check skipped when MIDTRANS_SERVER_KEY empty — safe default for dev; production MUST have key set (which it does in .env).",
+    "PaymentsTab shows referral_credit_applied inline in amount cell (-Rp… ref) — nice UX.",
+    "Instance-method class-scoped pytest fixture triggers PytestRemovedIn10Warning (not a bug, but should migrate to @classmethod before pytest 10)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter4.py (new — 10 tests)"
+  ],
+  "success_rate": {"backend": "100% (55/55 total; 10/10 new iter4)", "frontend": "100% of iter4 flows (register ref autofill, user referral panel, admin tab split)"},
+  "test_credentials": "admin@patungandigital.id / admin123",
+  "seed_data_creation": "Iter4 tests create multiple iter4_*@example.com users (A, B, rewA, rewB, mwh, aaA, aaB, noref) with subscriptions + payments. No cleanup between runs (dedupe safe via unique timestamps).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run all backend tests: `pytest -o addopts='' backend/tests/`. Iter4 introduces referral system + Midtrans replacing Xendit (Xendit webhook endpoint still exists for backward compat, tested in iter3). Midtrans signature: hashlib.sha512(f'{order_id}{status_code}{gross_amount}{MIDTRANS_SERVER_KEY}').hexdigest(). Referral reward is Rp 10.000 to both referrer and referred user on referred user's first payment marked paid, then auto-applied to referred user's next payment amount. Frontend tab split into /app/frontend/src/pages/admin/*.jsx modules — verified all 7 tabs load. Register page reads ?ref=CODE from URL and uppercases.",
+  "rca of the issue": "N/A — no bugs found in iter4."
+}

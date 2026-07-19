@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
@@ -6,8 +6,14 @@ import { toast } from "sonner";
 export default function Register() {
   const { register } = useAuth();
   const nav = useNavigate();
-  const [form, setForm] = useState({ name: "", username: "", email: "", password: "", whatsapp: "", gender: "" });
+  const [form, setForm] = useState({ name: "", username: "", email: "", password: "", whatsapp: "", gender: "", referral_code: "" });
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get("ref");
+    if (ref) setForm((f) => ({ ...f, referral_code: ref.toUpperCase() }));
+  }, []);
 
   const change = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
@@ -61,6 +67,11 @@ export default function Register() {
             <div>
               <label className="font-mono text-xs uppercase">Password</label>
               <input data-testid="reg-password" required type="password" minLength={6} value={form.password} onChange={change("password")} className="brutal-input mt-2" />
+            </div>
+            <div>
+              <label className="font-mono text-xs uppercase">Kode referral (opsional)</label>
+              <input data-testid="reg-referral" value={form.referral_code} onChange={change("referral_code")} className="brutal-input mt-2 uppercase" placeholder="XXXXXXXX" maxLength={8} />
+              <div className="text-xs text-gray-600 mt-1">Punya kode dari teman? Kalian dapat diskon Rp 10.000 setelah bayar pertama.</div>
             </div>
           </div>
           <button disabled={loading} type="submit" data-testid="reg-submit" className="brutal-btn brutal-btn-red w-full justify-center mt-8">

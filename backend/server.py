@@ -2,6 +2,7 @@
 import os
 import io
 import csv
+import hashlib
 import asyncio
 import logging
 import base64
@@ -25,6 +26,14 @@ from pydantic import BaseModel, EmailStr, Field
 import bcrypt
 import jwt
 import httpx
+
+
+# ---------------- Midtrans config ---------------- #
+MIDTRANS_IS_PROD = os.environ.get("MIDTRANS_IS_PRODUCTION", "false").lower() == "true"
+MIDTRANS_APP_BASE = "https://app.midtrans.com" if MIDTRANS_IS_PROD else "https://app.sandbox.midtrans.com"
+MIDTRANS_API_BASE = "https://api.midtrans.com" if MIDTRANS_IS_PROD else "https://api.sandbox.midtrans.com"
+MIDTRANS_SERVER_KEY = os.environ.get("MIDTRANS_SERVER_KEY", "")
+REFERRAL_REWARD = int(os.environ.get("REFERRAL_REWARD_IDR", "10000") or "10000")
 
 # ---------------- Mongo setup ---------------- #
 mongo_url = os.environ["MONGO_URL"]
@@ -114,6 +123,101 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
+# ---------------- Referral ---------------- #
+def gen_referral_code() -> str:
+    return secrets.token_urlsafe(6).replace("-", "").replace("_", "").upper()[:8]
+
+
+async def ensure_referral_code(user_id: str) -> str:
+    u = await db.users.find_one({"_id": ObjectId(user_id)})
+    if u.get("referral_code"):
+        return u["referral_code"]
+    # generate unique
+    for _ in range(10):
+        code = gen_referral_code()
+        if not await db.users.find_one({"referral_code": code}):
+            await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": {"referral_code": code}})
+            return code
+    raise HTTPException(500, "Failed to generate referral code")
+
+
+async def apply_referral_rewards_if_first_paid(payment_id: str):
+    """If payment just transitioned to paid and belongs to a user referred by someone,
+    and this is their first paid payment, credit Rp REFERRAL_REWARD to both."""
+    p = await db.payments.find_one({"_id": ObjectId(payment_id)})
+    if not p or p.get("status") != "paid":
+        return
+    sub = await db.subscriptions.find_one({"_id": ObjectId(p["subscription_id"])})
+    if not sub:
+        return
+    referred_user = await db.users.find_one({"_id": ObjectId(sub["user_id"])})
+    if not referred_user or referred_user.get("first_paid_at") or not referred_user.get("referred_by"):
+        return
+    referrer_id = referred_user["referred_by"]
+    referrer = await db.users.find_one({"_id": ObjectId(referrer_id)}) if ObjectId.is_valid(referrer_id) else None
+    if not referrer:
+        return
+    # Credit both
+    await db.users.update_one({"_id": referred_user["_id"]}, {
+        "$set": {"first_paid_at": now_utc()},
+        "$inc": {"referral_credit": REFERRAL_REWARD},
+    })
+    await db.users.update_one({"_id": referrer["_id"]}, {"$inc": {"referral_credit": REFERRAL_REWARD}})
+    await db.referral_rewards.insert_one({
+        "referrer_id": str(referrer["_id"]),
+        "referred_id": str(referred_user["_id"]),
+        "payment_id": payment_id,
+        "amount": REFERRAL_REWARD,
+        "created_at": now_utc(),
+    })
+    await log_admin_action(None, "referral_reward_credited", f"user:{referred_user['_id']}",
+                           {"referrer": referrer.get("email"), "referred": referred_user.get("email"), "amount": REFERRAL_REWARD})
+
+
+# ---------------- Midtrans helpers ---------------- #
+def midtrans_auth_header() -> str:
+    token = base64.b64encode(f"{MIDTRANS_SERVER_KEY}:".encode()).decode()
+    return f"Basic {token}"
+
+
+def midtrans_verify_signature(payload: dict) -> bool:
+    raw = f"{payload.get('order_id','')}{payload.get('status_code','')}{payload.get('gross_amount','')}{MIDTRANS_SERVER_KEY}"
+    expected = hashlib.sha512(raw.encode()).hexdigest()
+    return secrets.compare_digest(expected, payload.get("signature_key", ""))
+
+
+def midtrans_map_status(payload: dict) -> str:
+    ts = payload.get("transaction_status")
+    fraud = payload.get("fraud_status")
+    if ts == "settlement" or (ts == "capture" and fraud == "accept"):
+        return "paid"
+    if ts in {"cancel", "deny", "expire", "failure"}:
+        return "overdue"
+    if ts == "pending":
+        return "pending"
+    return "pending"
+
+
+async def midtrans_create_snap(order_id: str, amount: int, customer: dict, item_name: str) -> Optional[dict]:
+    if not MIDTRANS_SERVER_KEY:
+        return None
+    payload = {
+        "transaction_details": {"order_id": order_id, "gross_amount": int(amount)},
+        "customer_details": {"first_name": customer.get("name", ""), "email": customer.get("email", "")},
+        "item_details": [{"id": order_id, "price": int(amount), "quantity": 1, "name": item_name[:50]}],
+    }
+    headers = {"Accept": "application/json", "Content-Type": "application/json", "Authorization": midtrans_auth_header()}
+    try:
+        async with httpx.AsyncClient(timeout=20) as hc:
+            r = await hc.post(f"{MIDTRANS_APP_BASE}/snap/v1/transactions", json=payload, headers=headers)
+        if r.status_code < 300:
+            return r.json()
+        logger.warning(f"Midtrans Snap failed {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        logger.warning(f"Midtrans Snap exception: {e}")
+    return None
+
+
 # ---------------- Activity log ---------------- #
 async def log_admin_action(admin: Optional[dict], action: str, target: str = "", meta: Optional[dict] = None):
     """Persist an admin action to admin_logs. `admin` can be None for system/scheduler."""
@@ -139,6 +243,7 @@ class RegisterInput(BaseModel):
     username: Optional[str] = None
     whatsapp: Optional[str] = None
     gender: Optional[str] = None
+    referral_code: Optional[str] = None
 
 
 class LoginInput(BaseModel):
@@ -302,6 +407,18 @@ async def lifespan(app: FastAPI):
             await db.payments.update_one({"_id": p["_id"]}, {"$set": {"last_reminder_at": datetime.fromisoformat(p["last_reminder_at"])}})
         except Exception:
             pass
+    # Backfill referral codes for users that don't have one
+    async for u in db.users.find({"$or": [{"referral_code": None}, {"referral_code": {"$exists": False}}]}):
+        try:
+            for _ in range(5):
+                code = gen_referral_code()
+                if not await db.users.find_one({"referral_code": code}):
+                    await db.users.update_one({"_id": u["_id"]}, {"$set": {"referral_code": code, "referral_credit": u.get("referral_credit", 0)}})
+                    break
+        except Exception:
+            pass
+    await db.users.create_index("referral_code", unique=True, sparse=True)
+    await db.referral_rewards.create_index("referrer_id")
     # Seed admin
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@patungandigital.id")
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
@@ -364,6 +481,11 @@ async def register(input: RegisterInput, response: Response):
     email = input.email.lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email sudah terdaftar")
+    referred_by = None
+    if input.referral_code:
+        referrer = await db.users.find_one({"referral_code": input.referral_code.strip().upper()})
+        if referrer:
+            referred_by = str(referrer["_id"])
     doc = {
         "email": email,
         "password_hash": hash_password(input.password),
@@ -373,10 +495,16 @@ async def register(input: RegisterInput, response: Response):
         "gender": input.gender,
         "role": "user",
         "extra": {},
+        "referred_by": referred_by,
+        "referral_code": None,
+        "referral_credit": 0,
         "created_at": now_utc().isoformat(),
     }
     result = await db.users.insert_one(doc)
     doc["_id"] = result.inserted_id
+    # generate referral code
+    await ensure_referral_code(str(result.inserted_id))
+    doc = await db.users.find_one({"_id": result.inserted_id})
     token = create_token(str(result.inserted_id))
     response.set_cookie("access_token", token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
     return {"user": user_out(doc), "token": token}
@@ -388,6 +516,10 @@ async def login(input: LoginInput, response: Response):
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(input.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Email atau password salah")
+    # Ensure referral code exists for legacy users
+    if not user.get("referral_code"):
+        await ensure_referral_code(str(user["_id"]))
+        user = await db.users.find_one({"_id": user["_id"]})
     token = create_token(str(user["_id"]))
     response.set_cookie("access_token", token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
     return {"user": user_out(user), "token": token}
@@ -634,37 +766,43 @@ async def my_payments(user: dict = Depends(get_current_user)):
 @api.post("/admin/payments")
 async def admin_create_payment(input: PaymentInput, admin: dict = Depends(require_admin)):
     doc = input.model_dump()
-    # P2: store due_date as native BSON date
     doc["due_date"] = input.due_date if input.due_date else None
     doc["status"] = "pending"
     doc["created_at"] = now_utc().isoformat()
     doc["receipt"] = None
+    # Referral credit application: subtract available credit from user
+    sub = await db.subscriptions.find_one({"_id": ObjectId(doc["subscription_id"])})
+    payer = await db.users.find_one({"_id": ObjectId(sub["user_id"])}) if sub else None
+    applied_credit = 0
+    if payer and payer.get("referral_credit", 0) > 0:
+        applied_credit = min(int(payer["referral_credit"]), int(doc["amount"]))
+        doc["amount"] = int(doc["amount"]) - applied_credit
+        doc["referral_credit_applied"] = applied_credit
+        await db.users.update_one({"_id": payer["_id"]}, {"$inc": {"referral_credit": -applied_credit}})
+    # Insert
     result = await db.payments.insert_one(doc)
+    order_id = f"pd-{result.inserted_id}"
     doc["id"] = oid(result.inserted_id)
     doc.pop("_id", None)
     if doc.get("due_date"):
         doc["due_date"] = doc["due_date"].isoformat()
-    # Try create Xendit invoice if key exists
-    xendit_key = os.environ.get("XENDIT_API_KEY", "")
-    if xendit_key:
-        try:
-            async with httpx.AsyncClient() as hc:
-                r = await hc.post(
-                    "https://api.xendit.co/v2/invoices",
-                    auth=(xendit_key, ""),
-                    json={
-                        "external_id": f"pay-{result.inserted_id}",
-                        "amount": input.amount,
-                        "description": input.period_label or "Subscription payment",
-                    },
-                    timeout=15,
-                )
-                if r.status_code < 300:
-                    inv = r.json()
-                    await db.payments.update_one({"_id": result.inserted_id}, {"$set": {"xendit_invoice_url": inv.get("invoice_url"), "xendit_invoice_id": inv.get("id")}})
-                    doc["xendit_invoice_url"] = inv.get("invoice_url")
-        except Exception as e:
-            logger.warning(f"Xendit invoice failed: {e}")
+    # Midtrans Snap invoice (best effort)
+    if MIDTRANS_SERVER_KEY and doc["amount"] > 0 and payer:
+        svc = await db.services.find_one({"_id": ObjectId(sub["service_id"])}) if sub else None
+        snap = await midtrans_create_snap(
+            order_id=order_id,
+            amount=doc["amount"],
+            customer={"name": payer.get("name", ""), "email": payer.get("email", "")},
+            item_name=f"{(svc or {}).get('name','Subscription')} — {doc.get('period_label','')}",
+        )
+        if snap:
+            update = {
+                "midtrans_order_id": order_id,
+                "midtrans_token": snap.get("token"),
+                "midtrans_redirect_url": snap.get("redirect_url"),
+            }
+            await db.payments.update_one({"_id": result.inserted_id}, {"$set": update})
+            doc.update(update)
     return doc
 
 
@@ -688,6 +826,8 @@ async def admin_list_payments(admin: dict = Depends(require_admin)):
 async def admin_update_payment(payment_id: str, body: dict, admin: dict = Depends(require_admin)):
     allowed = {k: v for k, v in body.items() if k in {"status", "amount", "due_date", "period_label"}}
     await db.payments.update_one({"_id": ObjectId(payment_id)}, {"$set": allowed})
+    if allowed.get("status") == "paid":
+        await apply_referral_rewards_if_first_paid(payment_id)
     p = await db.payments.find_one({"_id": ObjectId(payment_id)})
     p["id"] = oid(p.pop("_id"))
     return p
@@ -969,6 +1109,62 @@ async def google_exchange(input: GoogleSessionInput, response: Response):
     return {"user": user_out(user), "token": jwt_token}
 
 
+# ---------------- Midtrans webhook ---------------- #
+@api.post("/webhooks/midtrans")
+async def midtrans_webhook(request: Request):
+    """Midtrans notification handler. Signature verified via SHA512."""
+    payload = await request.json()
+    if MIDTRANS_SERVER_KEY and not midtrans_verify_signature(payload):
+        raise HTTPException(status_code=401, detail="invalid signature")
+    order_id = payload.get("order_id", "")
+    if not order_id.startswith("pd-"):
+        return {"ok": True, "note": "ignored (unknown order_id)"}
+    payment_id = order_id[3:]
+    try:
+        obj_id = ObjectId(payment_id)
+    except Exception:
+        return {"ok": True, "note": "invalid payment id"}
+    new_status = midtrans_map_status(payload)
+    updates = {
+        "status": new_status,
+        "midtrans_transaction_id": payload.get("transaction_id"),
+        "midtrans_notification": payload,
+    }
+    if new_status == "paid":
+        updates["midtrans_paid_at"] = now_utc()
+    await db.payments.update_one({"_id": obj_id}, {"$set": updates})
+    if new_status == "paid":
+        await apply_referral_rewards_if_first_paid(payment_id)
+    await log_admin_action(None, "midtrans_webhook", f"payment:{payment_id}",
+                           {"status": new_status, "raw_status": payload.get("transaction_status")})
+    return {"ok": True, "status": new_status}
+
+
+# ---------------- Referral ---------------- #
+@api.get("/me/referral-stats")
+async def my_referral_stats(user: dict = Depends(get_current_user)):
+    code = user.get("referral_code")
+    if not code:
+        code = await ensure_referral_code(user["id"])
+    invited = await db.users.count_documents({"referred_by": user["id"]})
+    rewards = await db.referral_rewards.find({"referrer_id": user["id"]}).to_list(None)
+    total_earned = sum(r["amount"] for r in rewards)
+    referred_by_user = None
+    if user.get("referred_by") and ObjectId.is_valid(user["referred_by"]):
+        r = await db.users.find_one({"_id": ObjectId(user["referred_by"])})
+        if r:
+            referred_by_user = {"name": r.get("name"), "email": r.get("email")}
+    fresh = await db.users.find_one({"_id": ObjectId(user["id"])})
+    return {
+        "referral_code": code,
+        "referral_credit": fresh.get("referral_credit", 0),
+        "invited_count": invited,
+        "total_earned": total_earned,
+        "reward_per_referral": REFERRAL_REWARD,
+        "referred_by": referred_by_user,
+    }
+
+
 # ---------------- Xendit webhook ---------------- #
 @api.post("/webhooks/xendit")
 async def xendit_webhook(request: Request):
@@ -1001,16 +1197,27 @@ async def xendit_webhook(request: Request):
 # ---------------- Analytics ---------------- #
 @api.get("/admin/analytics")
 async def admin_analytics(admin: dict = Depends(require_admin)):
-    """Aggregate monthly revenue (paid payments) for last 12 months + revenue by service."""
+    """Aggregate monthly revenue + revenue-per-service via single $lookup pipeline."""
     now = now_utc()
     start = (now.replace(day=1, hour=0, minute=0, second=0, microsecond=0) - timedelta(days=365)).replace(day=1)
-    pipeline_monthly = [
+
+    base_pipeline = [
         {"$match": {"status": "paid"}},
         {"$addFields": {
             "created_dt": {"$cond": [{"$eq": [{"$type": "$created_at"}, "string"]},
                                      {"$dateFromString": {"dateString": "$created_at", "onError": None, "onNull": None}},
-                                     "$created_at"]}
+                                     "$created_at"]},
+            "sub_oid": {"$toObjectId": "$subscription_id"},
         }},
+        {"$lookup": {"from": "subscriptions", "localField": "sub_oid", "foreignField": "_id", "as": "sub"}},
+        {"$unwind": {"path": "$sub", "preserveNullAndEmptyArrays": True}},
+        {"$addFields": {"svc_oid": {"$toObjectId": "$sub.service_id"}}},
+        {"$lookup": {"from": "services", "localField": "svc_oid", "foreignField": "_id", "as": "svc"}},
+        {"$unwind": {"path": "$svc", "preserveNullAndEmptyArrays": True}},
+    ]
+
+    # Monthly (last 12 months)
+    monthly_rows = await db.payments.aggregate(base_pipeline + [
         {"$match": {"created_dt": {"$gte": start}}},
         {"$group": {
             "_id": {"y": {"$year": "$created_dt"}, "m": {"$month": "$created_dt"}},
@@ -1018,18 +1225,13 @@ async def admin_analytics(admin: dict = Depends(require_admin)):
             "count": {"$sum": 1},
         }},
         {"$sort": {"_id.y": 1, "_id.m": 1}},
-    ]
-    monthly_rows = await db.payments.aggregate(pipeline_monthly).to_list(None)
-    # Build 12-month timeline with zeroes
+    ]).to_list(None)
+
     months = []
     cursor = start
     while cursor <= now:
         months.append({"year": cursor.year, "month": cursor.month, "revenue": 0, "count": 0})
-        # next month
-        if cursor.month == 12:
-            cursor = cursor.replace(year=cursor.year + 1, month=1)
-        else:
-            cursor = cursor.replace(month=cursor.month + 1)
+        cursor = cursor.replace(year=cursor.year + 1, month=1) if cursor.month == 12 else cursor.replace(month=cursor.month + 1)
     for row in monthly_rows:
         y, m = row["_id"]["y"], row["_id"]["m"]
         for slot in months:
@@ -1040,31 +1242,27 @@ async def admin_analytics(admin: dict = Depends(require_admin)):
     labels_id = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
     monthly = [{"label": f"{labels_id[m['month']-1]} {str(m['year'])[2:]}", "revenue": m["revenue"], "count": m["count"]} for m in months]
 
-    # Revenue by service (all paid)
-    paid = await db.payments.find({"status": "paid"}).to_list(None)
-    by_service_map = {}
-    for p in paid:
-        sub = await db.subscriptions.find_one({"_id": ObjectId(p["subscription_id"])})
-        if not sub:
-            continue
-        svc = await db.services.find_one({"_id": ObjectId(sub["service_id"])})
-        if not svc:
-            continue
-        key = svc["name"]
-        entry = by_service_map.setdefault(key, {"service": key, "revenue": 0, "count": 0, "color": svc.get("color", "#0A0A0A")})
-        entry["revenue"] += p.get("amount", 0)
-        entry["count"] += 1
-    by_service = sorted(by_service_map.values(), key=lambda x: -x["revenue"])
+    # Revenue by service (single aggregation)
+    by_service_rows = await db.payments.aggregate(base_pipeline + [
+        {"$group": {
+            "_id": "$svc.name",
+            "color": {"$first": "$svc.color"},
+            "revenue": {"$sum": "$amount"},
+            "count": {"$sum": 1},
+        }},
+        {"$sort": {"revenue": -1}},
+    ]).to_list(None)
+    by_service = [{"service": r["_id"] or "-", "color": r.get("color") or "#0A0A0A", "revenue": r["revenue"], "count": r["count"]} for r in by_service_rows]
 
-    # Status distribution
-    status_pipeline = [{"$group": {"_id": "$status", "count": {"$sum": 1}, "total": {"$sum": "$amount"}}}]
-    status_rows = await db.payments.aggregate(status_pipeline).to_list(None)
+    # Status distribution + totals
+    status_rows = await db.payments.aggregate([{"$group": {"_id": "$status", "count": {"$sum": 1}, "total": {"$sum": "$amount"}}}]).to_list(None)
     status_dist = [{"status": r["_id"], "count": r["count"], "total": r["total"]} for r in status_rows]
-
+    total_rows = await db.payments.aggregate([{"$match": {"status": "paid"}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}, "count": {"$sum": 1}}}]).to_list(None)
+    tr = total_rows[0] if total_rows else {"total": 0, "count": 0}
     totals = {
-        "total_revenue_paid": sum(p.get("amount", 0) for p in paid),
-        "paid_count": len(paid),
-        "avg_payment": (sum(p.get("amount", 0) for p in paid) / len(paid)) if paid else 0,
+        "total_revenue_paid": tr["total"],
+        "paid_count": tr["count"],
+        "avg_payment": (tr["total"] / tr["count"]) if tr["count"] else 0,
     }
     return {"monthly": monthly, "by_service": by_service, "status_distribution": status_dist, "totals": totals}
 

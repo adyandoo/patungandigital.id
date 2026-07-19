@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import api, { rupiah, formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
-import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise } from "@phosphor-icons/react";
+import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise, Gift, Copy, ShareNetwork } from "@phosphor-icons/react";
 
 export default function UserDashboard() {
   const { user, setUser } = useAuth();
@@ -28,9 +28,12 @@ export default function UserDashboard() {
           <h1 className="font-display font-black text-4xl md:text-5xl mt-3">Halo, {user?.name}.</h1>
           <p className="text-gray-700 mt-1">Semua urusan patunganmu ada di sini.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <StatChip label="Langganan aktif" value={subs.filter((s) => s.status === "active").length} />
           <StatChip label="Tagihan" value={payments.filter((p) => p.status === "pending").length} />
+          {user?.referral_credit > 0 && (
+            <StatChip label="Kredit referral" value={rupiah(user.referral_credit)} />
+          )}
         </div>
       </div>
 
@@ -38,6 +41,7 @@ export default function UserDashboard() {
       <div className="mt-8 flex gap-2 border-b-2 border-black overflow-x-auto">
         <TabBtn active={tab === "subs"} onClick={() => setTab("subs")} icon={<Ticket weight="duotone" />} label="Langganan" testid="tab-subs" />
         <TabBtn active={tab === "payments"} onClick={() => setTab("payments")} icon={<Receipt weight="duotone" />} label="Pembayaran" testid="tab-payments" />
+        <TabBtn active={tab === "referral"} onClick={() => setTab("referral")} icon={<Gift weight="duotone" />} label="Referral" testid="tab-referral" />
         <TabBtn active={tab === "profile"} onClick={() => setTab("profile")} icon={<User weight="duotone" />} label="Profil" testid="tab-profile" />
         <TabBtn active={tab === "password"} onClick={() => setTab("password")} icon={<Lock weight="duotone" />} label="Password" testid="tab-password" />
       </div>
@@ -45,6 +49,7 @@ export default function UserDashboard() {
       <div className="mt-8">
         {tab === "subs" && <SubsPanel subs={subs} />}
         {tab === "payments" && <PaymentsPanel payments={payments} reload={loadAll} />}
+        {tab === "referral" && <ReferralPanel />}
         {tab === "profile" && <ProfilePanel user={user} setUser={setUser} />}
         {tab === "password" && <PasswordPanel />}
       </div>
@@ -139,7 +144,10 @@ function PaymentsPanel({ payments, reload }) {
             )}
           </div>
           <div className="flex flex-col items-start gap-2">
-            {p.xendit_invoice_url && (
+            {p.midtrans_redirect_url && (
+              <a href={p.midtrans_redirect_url} target="_blank" rel="noreferrer" className="brutal-btn brutal-btn-blue text-sm" data-testid={`pay-midtrans-${p.id}`}>Bayar via Midtrans</a>
+            )}
+            {!p.midtrans_redirect_url && p.xendit_invoice_url && (
               <a href={p.xendit_invoice_url} target="_blank" rel="noreferrer" className="brutal-btn brutal-btn-blue text-sm">Bayar via Xendit</a>
             )}
             <label className="brutal-btn brutal-btn-yellow text-sm cursor-pointer" data-testid={`upload-receipt-${p.id}`}>
@@ -234,6 +242,65 @@ function PasswordPanel() {
       </div>
       <button type="submit" className="brutal-btn brutal-btn-red mt-8" data-testid="pw-submit">Ubah password</button>
     </form>
+  );
+}
+
+function ReferralPanel() {
+  const [stats, setStats] = useState(null);
+  useEffect(() => { api.get("/me/referral-stats").then((r) => setStats(r.data)); }, []);
+  if (!stats) return <div className="brutal p-8">Memuat...</div>;
+
+  const shareText = `Halo! Yuk patungan langganan premium bareng di patungandigital.id. Pakai kode referralku *${stats.referral_code}* biar kita berdua dapat diskon Rp ${stats.reward_per_referral.toLocaleString("id-ID")}!`;
+  const shareLink = `${window.location.origin}/register?ref=${stats.referral_code}`;
+
+  const copy = (text, label = "Disalin!") => {
+    navigator.clipboard.writeText(text).then(() => toast.success(label)).catch(() => toast.error("Gagal menyalin"));
+  };
+  const shareWA = () => {
+    const url = `https://wa.me/?text=${encodeURIComponent(shareText + " " + shareLink)}`;
+    window.open(url, "_blank");
+  };
+
+  return (
+    <div className="grid md:grid-cols-3 gap-6" data-testid="referral-panel">
+      <div className="brutal p-8 md:col-span-2 bg-[#FFD60A]/30">
+        <div className="flex items-center gap-3">
+          <Gift weight="fill" size={32} />
+          <h3 className="font-display font-bold text-2xl">Kode referral kamu</h3>
+        </div>
+        <p className="mt-2 text-gray-800">Ajak teman patungan. Setiap teman yang daftar & bayar pertama kalinya, <b>kamu & dia dapat diskon Rp {stats.reward_per_referral.toLocaleString("id-ID")}</b> di tagihan berikutnya.</p>
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          <div className="brutal-sm bg-white px-6 py-4 font-mono font-black text-3xl tracking-widest" data-testid="referral-code">{stats.referral_code}</div>
+          <button onClick={() => copy(stats.referral_code, "Kode disalin!")} className="brutal-btn brutal-btn-white" data-testid="referral-copy-code">
+            <Copy weight="bold" /> Salin kode
+          </button>
+          <button onClick={() => copy(shareLink, "Link disalin!")} className="brutal-btn brutal-btn-white" data-testid="referral-copy-link">
+            <Copy weight="bold" /> Salin link
+          </button>
+          <button onClick={shareWA} className="brutal-btn brutal-btn-green" data-testid="referral-share-wa">
+            <ShareNetwork weight="bold" /> Share ke WhatsApp
+          </button>
+        </div>
+        {stats.referred_by && (
+          <div className="mt-6 brutal-sm bg-white p-3 text-sm">Kamu diundang oleh <b>{stats.referred_by.name}</b>. Terima kasih! 🎉</div>
+        )}
+      </div>
+      <div className="grid gap-4">
+        <div className="brutal p-5">
+          <div className="font-mono text-xs uppercase text-gray-600">Kredit tersedia</div>
+          <div className="font-display font-black text-3xl mt-1">{rupiah(stats.referral_credit)}</div>
+          <div className="text-xs text-gray-600 mt-1">Otomatis dipotong dari tagihan berikutnya.</div>
+        </div>
+        <div className="brutal p-5">
+          <div className="font-mono text-xs uppercase text-gray-600">Teman yang diajak</div>
+          <div className="font-display font-black text-3xl mt-1">{stats.invited_count}</div>
+        </div>
+        <div className="brutal p-5">
+          <div className="font-mono text-xs uppercase text-gray-600">Total reward earned</div>
+          <div className="font-display font-black text-3xl mt-1">{rupiah(stats.total_earned)}</div>
+        </div>
+      </div>
+    </div>
   );
 }
 
