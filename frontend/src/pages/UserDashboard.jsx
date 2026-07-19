@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import api, { rupiah, formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
-import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise, Gift, Copy, ShareNetwork, Trophy, Medal, Circle, CheckFat, Sparkle, UsersThree, Eye, EyeSlash, Key, QrCode, CurrencyCircleDollar, ArrowSquareOut, X as Xicon, Star, ChatCircleDots, ArrowClockwise, Warning, Camera, Trash } from "@phosphor-icons/react";
+import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise, Gift, Copy, ShareNetwork, Trophy, Medal, Circle, CheckFat, Sparkle, UsersThree, Eye, EyeSlash, Key, QrCode, CurrencyCircleDollar, ArrowSquareOut, X as Xicon, Star, ChatCircleDots, ArrowClockwise, Warning, Camera, Trash, Megaphone, Info } from "@phosphor-icons/react";
 import Avatar from "@/components/Avatar";
 
 export default function UserDashboard() {
@@ -11,17 +11,27 @@ export default function UserDashboard() {
   const [subs, setSubs] = useState([]);
   const [payments, setPayments] = useState([]);
   const [onboarding, setOnboarding] = useState(null);
+  const [announcements, setAnnouncements] = useState([]);
 
   const loadAll = async () => {
     try {
-      const [s, p, o] = await Promise.all([
+      const [s, p, o, a] = await Promise.all([
         api.get("/me/subscriptions"),
         api.get("/me/payments"),
         api.get("/me/onboarding"),
+        api.get("/me/announcements"),
       ]);
       setSubs(s.data);
       setPayments(p.data);
       setOnboarding(o.data);
+      setAnnouncements(a.data);
+    } catch {}
+  };
+
+  const dismissAnn = async (id) => {
+    try {
+      await api.post(`/me/announcements/${id}/dismiss`);
+      setAnnouncements(announcements.filter((a) => a.id !== id));
     } catch {}
   };
 
@@ -52,11 +62,30 @@ export default function UserDashboard() {
         <OnboardingCard data={onboarding} goToTab={setTab} />
       )}
 
+      {/* Announcement banners */}
+      {announcements.length > 0 && (
+        <div className="mt-6 space-y-3" data-testid="announcement-banners">
+          {announcements.map((a) => (
+            <div key={a.id} className={`brutal p-5 flex items-start gap-4 flex-wrap ${a.severity === "critical" ? "bg-[#FF3B30] text-white" : a.severity === "warning" ? "bg-[#FFD60A]" : "bg-[#007AFF] text-white"}`} data-testid={`ann-banner-${a.id}`}>
+              <Megaphone weight="fill" size={28} className="flex-shrink-0" />
+              <div className="flex-1 min-w-[200px]">
+                <div className="font-display font-black text-lg">{a.title}</div>
+                <div className="text-sm mt-1 opacity-95 whitespace-pre-line">{a.body}</div>
+              </div>
+              <button onClick={() => dismissAnn(a.id)} className="brutal-sm bg-white text-black px-3 py-1 text-xs font-mono uppercase" data-testid={`ann-dismiss-${a.id}`}>
+                Tutup
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="mt-8 flex gap-2 border-b-2 border-black overflow-x-auto">
         <TabBtn active={tab === "subs"} onClick={() => setTab("subs")} icon={<Ticket weight="duotone" />} label="Langganan" testid="tab-subs" />
         <TabBtn active={tab === "groups"} onClick={() => setTab("groups")} icon={<UsersThree weight="duotone" />} label="Grup & Akses" testid="tab-groups" />
         <TabBtn active={tab === "payments"} onClick={() => setTab("payments")} icon={<Receipt weight="duotone" />} label="Pembayaran" testid="tab-payments" />
+        <TabBtn active={tab === "announcements"} onClick={() => setTab("announcements")} icon={<Megaphone weight="duotone" />} label="Pengumuman" testid="tab-announcements" />
         <TabBtn active={tab === "referral"} onClick={() => setTab("referral")} icon={<Gift weight="duotone" />} label="Referral" testid="tab-referral" />
         <TabBtn active={tab === "testimoni"} onClick={() => setTab("testimoni")} icon={<ChatCircleDots weight="duotone" />} label="Testimoni" testid="tab-testimoni" />
         <TabBtn active={tab === "profile"} onClick={() => setTab("profile")} icon={<User weight="duotone" />} label="Profil" testid="tab-profile" />
@@ -67,6 +96,7 @@ export default function UserDashboard() {
         {tab === "subs" && <SubsPanel subs={subs} reload={loadAll} />}
         {tab === "groups" && <GroupsPanel />}
         {tab === "payments" && <PaymentsPanel payments={payments} reload={loadAll} />}
+        {tab === "announcements" && <AnnouncementsPanel />}
         {tab === "referral" && <ReferralPanel />}
         {tab === "testimoni" && <TestimoniPanel />}
         {tab === "profile" && <ProfilePanel user={user} setUser={setUser} />}
@@ -629,6 +659,35 @@ function StatusPillTestimoni({ status }) {
   };
   const m = map[status] || map.pending;
   return <span className={`brutal-sm px-2 py-1 text-xs font-mono uppercase ${m.bg} ${m.fg}`}>{m.text}</span>;
+}
+
+function AnnouncementsPanel() {
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    api.get("/me/announcements?only_active=false").then((r) => setItems(r.data)).catch(() => setItems([]));
+  }, []);
+  if (items.length === 0) return <EmptyState msg="Belum ada pengumuman." />;
+  return (
+    <div className="space-y-3 max-w-3xl" data-testid="announcements-panel">
+      {items.map((a) => {
+        const sev = a.severity === "critical" ? "bg-[#FF3B30] text-white" : a.severity === "warning" ? "bg-[#FFD60A]" : "bg-[#007AFF] text-white";
+        return (
+          <div key={a.id} className={`brutal p-5 ${sev}`} data-testid={`ann-archive-${a.id}`}>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <Megaphone weight="fill" size={20} />
+                <span className="pd-tag bg-white text-black">{a.severity}</span>
+                {a.dismissed && <span className="pd-tag bg-white/40 text-white">Sudah dibaca</span>}
+              </div>
+              <span className="text-xs font-mono opacity-80">{a.created_at ? new Date(a.created_at).toLocaleString("id-ID") : ""}</span>
+            </div>
+            <div className="font-display font-black text-lg mt-2">{a.title}</div>
+            <div className="text-sm mt-1 opacity-95 whitespace-pre-line">{a.body}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function PasswordPanel() {

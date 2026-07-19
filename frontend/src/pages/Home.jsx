@@ -260,7 +260,11 @@ export default function Home() {
 
       <footer className="border-t-2 border-black px-6 md:px-12 py-10 flex items-center justify-between flex-wrap gap-4">
         <div className="font-display font-black">patungandigital.id © {new Date().getFullYear()}</div>
-        <div className="text-sm text-gray-700">Hemat itu pintar. Patungan itu keren.</div>
+        <div className="flex gap-4 items-center flex-wrap">
+          <Link to="/about" data-testid="footer-about" className="text-sm underline">Tentang Kami</Link>
+          <Link to="/blog" data-testid="footer-blog" className="text-sm underline">Blog</Link>
+          <div className="text-sm text-gray-700">Hemat itu pintar. Patungan itu keren.</div>
+        </div>
       </footer>
 
       {waitlistFor && <WaitlistModal service={waitlistFor} onClose={() => setWaitlistFor(null)} />}

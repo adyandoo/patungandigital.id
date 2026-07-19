@@ -3,6 +3,7 @@ import api, { rupiah, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { PlusCircle, PaperPlaneTilt, Eye, Image as ImageIcon, DownloadSimple } from "@phosphor-icons/react";
 import { Modal, F, SearchInput } from "./shared";
+import DatePicker from "@/components/DatePicker";
 
 export default function PaymentsTab() {
   const [payments, setPayments] = useState([]);
@@ -175,7 +176,7 @@ function PaymentModal({ subs, onClose, onSaved }) {
             <input type="number" min={1} max={24} required className="brutal-input" value={form.duration_months} onChange={(e) => setForm({ ...form, duration_months: e.target.value })} data-testid="pay-modal-duration" />
           </F>
         </div>
-        <F label="Jatuh tempo"><input type="date" className="brutal-input" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} /></F>
+        <F label="Jatuh tempo"><DatePicker value={form.due_date} onChange={(v) => setForm({ ...form, due_date: v })} testId="pay-modal-due-date" placeholder="Pilih tanggal jatuh tempo" /></F>
         <div className="text-xs text-gray-600">Note: kredit referral user (jika ada) akan otomatis dipotong. Saat lunas, langganan otomatis diperpanjang sebanyak <b>{form.duration_months || 1}</b> bulan dari tanggal berakhir.</div>
         <button type="submit" className="brutal-btn brutal-btn-red" data-testid="pay-modal-save">Buat tagihan</button>
       </form>

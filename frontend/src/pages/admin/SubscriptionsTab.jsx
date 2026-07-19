@@ -3,6 +3,7 @@ import api, { rupiah, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { PlusCircle, Trash } from "@phosphor-icons/react";
 import { Modal, F, SearchInput } from "./shared";
+import DatePicker from "@/components/DatePicker";
 
 export default function SubscriptionsTab() {
   const [subs, setSubs] = useState([]);
@@ -138,8 +139,8 @@ function SubModal({ users, services, onClose, onSaved }) {
           )}
         </F>
         <div className="grid grid-cols-2 gap-3">
-          <F label="Mulai"><input type="date" className="brutal-input" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} /></F>
-          <F label="Sampai (opsional)"><input type="date" className="brutal-input" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} /></F>
+          <F label="Mulai"><DatePicker value={form.start_date} onChange={(v) => setForm({ ...form, start_date: v })} testId="sub-modal-start" placeholder="Pilih tanggal mulai" allowClear={false} /></F>
+          <F label="Sampai (opsional)"><DatePicker value={form.end_date} onChange={(v) => setForm({ ...form, end_date: v })} testId="sub-modal-end" placeholder="Pilih tanggal berakhir" /></F>
         </div>
         <button type="submit" className="brutal-btn brutal-btn-red" data-testid="submod-save">Simpan</button>
       </form>

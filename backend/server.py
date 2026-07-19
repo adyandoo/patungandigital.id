@@ -589,6 +589,53 @@ class RenewInput(BaseModel):
     duration_months: Optional[int] = Field(default=None, ge=1, le=24)
 
 
+class AboutInput(BaseModel):
+    hero_title: str = Field(min_length=1, max_length=120)
+    story: str = Field(min_length=1, max_length=4000)
+    mission: Optional[str] = Field(default="", max_length=2000)
+    contact_email: Optional[str] = ""
+    contact_whatsapp: Optional[str] = ""
+    contact_address: Optional[str] = ""
+
+
+class BlogPostInput(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    slug: Optional[str] = None  # auto-generated if not provided
+    excerpt: Optional[str] = Field(default="", max_length=300)
+    content: str = Field(min_length=1)  # markdown
+    cover_image_base64: Optional[str] = None
+    tags: List[str] = []
+    published: bool = False
+
+
+class BlogPostUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    slug: Optional[str] = None
+    excerpt: Optional[str] = Field(default=None, max_length=300)
+    content: Optional[str] = None
+    cover_image_base64: Optional[str] = None
+    tags: Optional[List[str]] = None
+    published: Optional[bool] = None
+
+
+class AnnouncementInput(BaseModel):
+    title: str = Field(min_length=1, max_length=140)
+    body: str = Field(min_length=1, max_length=2000)
+    target: str = Field(default="all")  # 'all' | 'service_ids'
+    service_ids: List[str] = []
+    severity: str = Field(default="info")  # 'info' | 'warning' | 'critical'
+    expires_at: Optional[datetime] = None
+
+
+class AnnouncementUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=140)
+    body: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+    target: Optional[str] = None
+    service_ids: Optional[List[str]] = None
+    severity: Optional[str] = None
+    expires_at: Optional[datetime] = None
+
+
 # ---------------- App ---------------- #
 _scheduler_stop = asyncio.Event()
 
@@ -926,8 +973,16 @@ async def _send_email(to_email: str, subject: str, html: str) -> dict:
 
 @api.post("/auth/forgot-password")
 async def forgot_password(input: ForgotPasswordInput):
-    """Generate a 1-hour reset token and email it. Always returns 200 to avoid enumeration."""
+    """Generate a 1-hour reset token and email it. Always returns 200 to avoid enumeration.
+    Rate-limited: max 1 token per email per 5 minutes."""
     email = input.email.lower()
+    # Rate-limit check
+    recent = await db.password_resets.find_one({
+        "email": email,
+        "created_at": {"$gte": now_utc() - timedelta(minutes=5)},
+    })
+    if recent:
+        return {"ok": True, "message": "Jika email terdaftar, kami sudah mengirim link reset.", "rate_limited": True}
     user = await db.users.find_one({"email": email})
     if user:
         token = secrets.token_urlsafe(32)
@@ -1755,9 +1810,11 @@ app.include_router(groups_router, prefix="/api")
 from routers.settings import router as settings_router
 from routers.admin_users import router as admin_users_router
 from routers.testimonials import router as testimonials_router
+from routers.cms import router as cms_router
 app.include_router(settings_router, prefix="/api")
 app.include_router(admin_users_router, prefix="/api")
 app.include_router(testimonials_router, prefix="/api")
+app.include_router(cms_router, prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,

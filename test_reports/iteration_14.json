@@ -1,0 +1,32 @@
+{
+  "summary": "Iter14: 20/20 backend pytest tests pass (P3 forgot-password rate-limit, P4 About get/put/403, P5 Blog draft-hidden/publish/tag-filter/duplicate-slug/excerpt-422/title-422/non-admin/delete, P6 Announcements target=all/service_ids scoping, severity/target 422, dismiss removes from only_active, expired excluded, admin lists all with dismissed_by_count). Frontend UI verified: Navbar Beranda/Blog/Tentang + footer links, /about hero+story+mission+contact renders, /blog grid + detail with ReactMarkdown content, admin About/Blog/Announcements tabs load, Blog modal has all fields, Payments 'Jatuh tempo' Shadcn DatePicker with Indonesian locale (label '29 Juni 2026') + clear button works, Subscriptions Mulai/Sampai date pickers present (label '19 Juli 2026'), user dashboard announcement-banners renders with dismiss button, dismissed announcement archived in Pengumuman tab.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Blog detail /blog/:slug", "issues": ["ReactMarkdown content renders inside .prose but a heading like '# Halo' appears as plain 'Halo' text — Tailwind Typography plugin may not be configured, so markdown headings/paragraphs lose visual hierarchy. Consider adding @tailwindcss/typography and prose base styles."]},
+      {"screen": "Admin SubscriptionsTab user <select>", "issues": ["Dev overlay logs a React hydration warning: '<span> cannot be a child of <option>' — caused by inspector-injected spans inside <option> nodes in SubscriptionsTab (line 110). Non-functional in production build but pollutes console. Consider rendering user labels without wrapping template expressions."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter14.py", "/app/test_reports/pytest/iter14.xml"],
+  "action_items": [
+    "(Optional) Install @tailwindcss/typography and enable prose plugin so blog markdown renders with headings/lists/quotes formatting.",
+    "(Optional) Clean up SubscriptionsTab <option> child rendering to avoid dev-mode hydration warning."
+  ],
+  "critical_code_review_comments": [
+    "backend/routers/cms.py imports models + db + require_admin FROM server.py — circular-ish. Extract shared deps + models into backend/models.py + backend/deps.py to prevent server.py becoming a god module (still 1826 lines).",
+    "cms.py severity/target validation duplicated in Pydantic default + manual 422 raises; consolidate into pydantic validators for consistent error format.",
+    "blog_posts collection lacks a unique index on slug — race condition possible for concurrent creates with same slug (find_one+insert is not atomic). Add: db.blog_posts.create_index('slug', unique=True) at startup.",
+    "announcements dismissed_by list grows unboundedly (per user) — for site-wide 'all' announcements read by many users this doc can bloat. Consider a separate collection announcement_dismissals(user_id, ann_id) with compound index.",
+    "GET /api/blog uses tag='exact match' — no case-insensitivity; if admin creates tag 'Tips' and later 'tips', they split. Recommend .lower() on tag ingest."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter14.py"],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "100% on all requested flows"},
+  "test_credentials": "admin@patungandigital.id / Adm!nPd-JavpOaidEa6wZgFnBS",
+  "seed_data_creation": "Test artifacts prefixed iter14 (users iter14u_<run>, iter14rl_<run>, blog post 'Iter14 Post <run>', announcements 'All iter14 <run>', 'Scoped <run>', 'Expired <run>'). All blog posts + announcements cleaned up by test teardown. Users remain (use /api/admin/cleanup-test-users?prefix=iter14 to purge).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter14 fully green. Backend tests live in /app/backend/tests/test_iter14.py (run with pytest -o addopts= to skip parallel). New routes are namespaced under CMS router: /api/about (public GET), /api/admin/about (PUT), /api/blog (public list/detail), /api/admin/blog (CRUD), /api/me/announcements (GET+dismiss), /api/admin/announcements (CRUD). Blog auto-slug uses ascii-fold + hyphenate; duplicate slug on create gets a unix-timestamp suffix; duplicate slug on PATCH returns 400. Announcements: target='all' overrides service_ids to [] on create; scoped announcements match user via active subscriptions only. Rate-limit for forgot-password uses db.password_resets.created_at within last 5 minutes — for retesting use fresh emails. AdminDashboard sidebar test-ids follow pattern admin-tab-{id} (about|blog|announcements). DatePicker component wraps Shadcn Calendar with date-fns/locale/id — verified label format '19 Juli 2026'. Note: Tailwind Typography plugin not configured, so markdown H1/H2/lists render unstyled in blog detail — cosmetic only.",
+  "rca of the issue": "N/A — 100% pass."
+}

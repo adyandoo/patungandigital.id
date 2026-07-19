@@ -17,6 +17,8 @@ export default function Navbar() {
         </Link>
         <nav className="flex items-center gap-3">
           <Link to="/" data-testid="nav-home" className={`hidden md:inline text-sm font-semibold ${loc.pathname === "/" ? "underline decoration-2 underline-offset-4" : ""}`}>Beranda</Link>
+          <Link to="/blog" data-testid="nav-blog" className={`hidden md:inline text-sm font-semibold ${loc.pathname.startsWith("/blog") ? "underline decoration-2 underline-offset-4" : ""}`}>Blog</Link>
+          <Link to="/about" data-testid="nav-about" className={`hidden md:inline text-sm font-semibold ${loc.pathname === "/about" ? "underline decoration-2 underline-offset-4" : ""}`}>Tentang</Link>
           {authed && !isAdmin && (
             <Link to="/dashboard" data-testid="nav-dashboard" className="hidden md:inline text-sm font-semibold">Dashboard</Link>
           )}

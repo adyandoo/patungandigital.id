@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
-import { Users, PaperPlaneTilt, Receipt, Storefront, Ticket, GearSix, ClockCounterClockwise, UsersThree, Clock, QrCode, CalendarPlus, ChatCircleDots } from "@phosphor-icons/react";
+import { Users, PaperPlaneTilt, Receipt, Storefront, Ticket, GearSix, ClockCounterClockwise, UsersThree, Clock, QrCode, CalendarPlus, ChatCircleDots, Info, Newspaper, Megaphone } from "@phosphor-icons/react";
 import OverviewTab from "./admin/OverviewTab";
 import UsersTab from "./admin/UsersTab";
 import ServicesTab from "./admin/ServicesTab";
@@ -13,6 +13,9 @@ import AutoInvoiceTab from "./admin/AutoInvoiceTab";
 import TestimonialsTab from "./admin/TestimonialsTab";
 import ActivityTab from "./admin/ActivityTab";
 import WaitlistTab from "./admin/WaitlistTab";
+import AboutTab from "./admin/AboutTab";
+import BlogTab from "./admin/BlogTab";
+import AnnouncementsTab from "./admin/AnnouncementsTab";
 
 const TABS = [
   { id: "overview", label: "Overview", icon: <GearSix weight="duotone" />, Comp: OverviewTab },
@@ -24,6 +27,9 @@ const TABS = [
   { id: "payment-settings", label: "Payment Config", icon: <QrCode weight="duotone" />, Comp: PaymentSettingsTab },
   { id: "auto-invoice", label: "Auto Invoice", icon: <CalendarPlus weight="duotone" />, Comp: AutoInvoiceTab },
   { id: "testimonials", label: "Testimoni", icon: <ChatCircleDots weight="duotone" />, Comp: TestimonialsTab },
+  { id: "announcements", label: "Pengumuman", icon: <Megaphone weight="duotone" />, Comp: AnnouncementsTab },
+  { id: "blog", label: "Blog", icon: <Newspaper weight="duotone" />, Comp: BlogTab },
+  { id: "about", label: "Tentang", icon: <Info weight="duotone" />, Comp: AboutTab },
   { id: "waitlist", label: "Waitlist", icon: <Clock weight="duotone" />, Comp: WaitlistTab },
   { id: "reminder", label: "Reminder", icon: <PaperPlaneTilt weight="duotone" />, Comp: ReminderTab },
   { id: "activity", label: "Activity", icon: <ClockCounterClockwise weight="duotone" />, Comp: ActivityTab },
