@@ -978,6 +978,82 @@ async def _send_verification_email(user_id: str, email: str, name: str) -> dict:
     return {**result, "verify_url": verify_url}
 
 
+async def _send_welcome_email(email: str, name: str, referral_code: str) -> dict:
+    """Send a branded welcome email after email verification.
+    Includes onboarding link, subscribe instructions, and referral code with share buttons."""
+    frontend = os.environ.get("FRONTEND_URL", "").rstrip("/")
+    dashboard_url = f"{frontend}/dashboard"
+    home_url = f"{frontend}/"
+    ref_link = f"{frontend}/register?ref={referral_code}" if referral_code else frontend
+    # WhatsApp share message
+    wa_text = (
+        f"Halo! Aku pakai patungandigital.id buat langganan premium (YouTube, Netflix, Spotify) "
+        f"harga hemat lewat sistem patungan. Daftar pakai kode referralku: *{referral_code}* "
+        f"biar dapet bonus. Link: {ref_link}"
+    )
+    from urllib.parse import quote
+    wa_url = f"https://wa.me/?text={quote(wa_text)}"
+
+    display_name = name or "Sahabat Patungan"
+    html = f"""
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;max-width:600px;margin:0 auto;background:#FFF8EC;padding:0;color:#0A0A0A;">
+      <div style="background:#0A0A0A;padding:24px;text-align:left;border-bottom:4px solid #FF3B30;">
+        <h1 style="color:#FFF8EC;margin:0;font-size:24px;letter-spacing:-0.5px;">patungandigital.id</h1>
+        <p style="color:#FFC93C;margin:6px 0 0;font-size:13px;font-weight:600;">Langganan Premium, Patungan Bareng.</p>
+      </div>
+
+      <div style="padding:32px 24px;">
+        <h2 style="font-size:22px;margin:0 0 12px;line-height:1.3;">Halo {display_name}, akunmu sudah aktif! 🎉</h2>
+        <p style="font-size:15px;line-height:1.6;margin:0 0 20px;color:#333;">
+          Selamat datang di <strong>patungandigital.id</strong> — platform patungan legal untuk layanan digital premium.
+          Sekarang kamu bisa mulai berlangganan YouTube, Netflix, Spotify, dan lainnya dengan harga jauh lebih hemat.
+        </p>
+
+        <div style="background:#fff;border:2px solid #0A0A0A;padding:20px;margin:24px 0;">
+          <h3 style="margin:0 0 12px;font-size:16px;">Cara Mulai Berlangganan:</h3>
+          <ol style="margin:0;padding-left:20px;font-size:14px;line-height:1.8;color:#333;">
+            <li>Login ke dashboard kamu</li>
+            <li>Pilih layanan yang mau dilanggan (YouTube / Netflix / Spotify / dll)</li>
+            <li>Pilih durasi langganan (1, 3, 6, atau 12 bulan)</li>
+            <li>Selesaikan pembayaran (QRIS manual atau otomatis via Midtrans)</li>
+            <li>Admin akan assign kamu ke grup & kirim kredensial akses via dashboard</li>
+          </ol>
+        </div>
+
+        <div style="text-align:center;margin:28px 0;">
+          <a href="{dashboard_url}" style="background:#FF3B30;color:#fff;padding:14px 28px;text-decoration:none;font-weight:bold;border:3px solid #0A0A0A;display:inline-block;font-size:15px;">Ke Dashboard Saya →</a>
+        </div>
+
+        <div style="background:#FFC93C;border:3px solid #0A0A0A;padding:20px;margin:32px 0 24px;">
+          <p style="margin:0 0 6px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;">Kode Referral Kamu</p>
+          <p style="margin:0 0 12px;font-size:32px;font-weight:900;letter-spacing:2px;color:#0A0A0A;font-family:'Courier New',monospace;">{referral_code or '—'}</p>
+          <p style="margin:0 0 16px;font-size:13px;line-height:1.5;color:#0A0A0A;">
+            Bagikan kode ini ke teman. Setiap teman yang berhasil berlangganan pakai kode kamu, kamu dapat kredit bonus yang bisa dipakai untuk langganan berikutnya.
+          </p>
+          <div style="display:block;">
+            <a href="{wa_url}" style="background:#25D366;color:#fff;padding:10px 18px;text-decoration:none;font-weight:bold;border:2px solid #0A0A0A;display:inline-block;font-size:13px;margin:4px 6px 4px 0;">Share via WhatsApp</a>
+            <a href="{ref_link}" style="background:#fff;color:#0A0A0A;padding:10px 18px;text-decoration:none;font-weight:bold;border:2px solid #0A0A0A;display:inline-block;font-size:13px;margin:4px 0;">Salin Link Referral</a>
+          </div>
+        </div>
+
+        <p style="font-size:13px;color:#666;line-height:1.6;margin:24px 0 0;border-top:1px solid #ddd;padding-top:16px;">
+          Butuh bantuan? Balas email ini atau hubungi admin lewat WhatsApp yang tertera di website.
+          <br/>Sampai jumpa di dashboard!
+        </p>
+      </div>
+
+      <div style="background:#0A0A0A;padding:16px 24px;text-align:center;">
+        <p style="margin:0;color:#FFF8EC;font-size:12px;">
+          <a href="{home_url}" style="color:#FFC93C;text-decoration:none;">patungandigital.id</a>
+          &nbsp;·&nbsp; Langganan legal · Patungan hemat
+        </p>
+      </div>
+    </div>
+    """
+    result = await _send_email(email, "Selamat datang di patungandigital.id 🎉", html)
+    return result
+
+
 class ResendVerificationInput(BaseModel):
     email: EmailStr
 
@@ -1044,6 +1120,24 @@ async def verify_email(input: VerifyEmailInput, response: Response):
     )
     await db.email_verifications.update_one({"_id": rec["_id"]}, {"$set": {"used": True, "used_at": now_utc()}})
     user = await db.users.find_one({"_id": ObjectId(rec["user_id"])})
+    # Ensure referral code exists so we can include it in the welcome email
+    if not user.get("referral_code"):
+        await ensure_referral_code(str(user["_id"]))
+        user = await db.users.find_one({"_id": ObjectId(rec["user_id"])})
+    # Send welcome email (idempotent flag — only send once per user)
+    if not user.get("welcome_email_sent"):
+        try:
+            await _send_welcome_email(
+                user.get("email", ""),
+                user.get("name", ""),
+                user.get("referral_code", ""),
+            )
+            await db.users.update_one(
+                {"_id": user["_id"]},
+                {"$set": {"welcome_email_sent": True, "welcome_email_sent_at": now_utc().isoformat()}},
+            )
+        except Exception as e:
+            logger.warning(f"Welcome email send failed for {user.get('email')}: {e}")
     # Auto-login on successful verification
     token = create_token(rec["user_id"])
     response.set_cookie("access_token", token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")

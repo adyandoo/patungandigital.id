@@ -1,0 +1,23 @@
+{
+  "summary": "Iteration 17 backend test — Welcome email on verify-email endpoint. All 12 tests passed (100%). Verified: (1) verify-email marks welcome_email_sent=True + welcome_email_sent_at ISO ts + auto-generates referral_code, (2) token reuse returns 400 (idempotent), (3) empty name does not crash (fallback 'Sahabat Patungan' used), (4) login/register/resend-verification/forgot-password endpoints still work with no regressions, (5) invalid token still 400.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter17_welcome_email.py",
+    "/app/test_reports/pytest/iter17_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 2093 lines — should be split into modular routers (auth, admin, payments, etc.) for maintainability.",
+    "In verify_email handler, welcome-email try/except correctly prevents SendGrid failures from blocking verification. Note: if welcome email send fails, welcome_email_sent flag is not set — this is intentional so a retry could occur, but there is currently no retry endpoint. Consider a background retry queue.",
+    "_send_welcome_email does not have a mocked fallback; relies on _send_email which should handle missing SendGrid key. Confirmed try/except wraps the call.",
+    "welcome_email_sent_at stored as ISO string while other timestamps (e.g., used_at) use datetime — inconsistent. Consider standardizing."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter17_welcome_email.py"],
+  "success_rate": {"backend": "100%", "frontend": "not tested (backend only)"},
+  "test_credentials": "admin@patungandigital.id / Adm!nPd-JavpOaidEa6wZgFnBS (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Test users prefixed test_iter17_ created and cleaned up in test_zzz_cleanup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter17 added welcome email flow on POST /api/auth/verify-email in server.py. New helper _send_welcome_email(email, name, referral_code) sends branded HTML via SendGrid. Test file at /app/backend/tests/test_iter17_welcome_email.py uses local backend URL (http://localhost:8001) for direct DB access via MongoClient. Cleanup automatic. Note: iter16 test test_resend_verification_rate_limited would now fail because resend-verification endpoint was updated to return uniform response (no rate_limited field) to prevent email enumeration — but that is expected/desired security improvement, not a bug."
+}
