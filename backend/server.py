@@ -831,6 +831,18 @@ async def lifespan(app: FastAPI):
     # Indexes
     await db.users.create_index("email", unique=True)
     await db.users.create_index("username")
+    # referral_code unique but only where field is a real string.
+    # (sparse=True incorrectly treats null as present → causes duplicate-null collisions.)
+    try:
+        existing = await db.users.index_information()
+        if "referral_code_1" in existing and existing["referral_code_1"].get("sparse"):
+            await db.users.drop_index("referral_code_1")
+        await db.users.create_index(
+            "referral_code", unique=True,
+            partialFilterExpression={"referral_code": {"$type": "string"}},
+        )
+    except Exception as e:
+        logger.warning(f"Could not (re)create referral_code index: {e}")
     await db.services.create_index("slug", unique=True)
     await db.subscriptions.create_index("user_id")
     await db.payments.create_index("subscription_id")
@@ -859,7 +871,6 @@ async def lifespan(app: FastAPI):
                     break
         except Exception:
             pass
-    await db.users.create_index("referral_code", unique=True, sparse=True)
     await db.referral_rewards.create_index("referrer_id")
     # TTL index: auto-delete expired verification tokens 24h after expiry.
     # `expireAfterSeconds=86400` = document is deleted 1 day AFTER the `expires_at` datetime.
@@ -1153,7 +1164,6 @@ async def register(input: RegisterInput, response: Response):
         "role": "user",
         "extra": {},
         "referred_by": referred_by,
-        "referral_code": None,
         "referral_credit": 0,
         "email_verified": False,
         "auth_provider": "manual",

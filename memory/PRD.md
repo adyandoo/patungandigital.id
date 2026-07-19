@@ -259,6 +259,7 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - **P3a NEW — Referral tier rework**: `TIER_THRESHOLDS` updated to Tier 1 = 10 refs → 1 mo, Tier 2 = 15 refs → 2 mo (cumulative 3 mo), Tier 3 = 45 refs → 5 mo (cumulative 8 mo). Home page tier chips + UserDashboard ReferralPanel automatically pick up new values from backend.
 - **P3b NEW — TTL indexes**: Added `expireAfterSeconds=86400` indexes on `email_verifications.expires_at` and `password_resets.expires_at`. Documents auto-purge 1 day after expiry, keeping the collections lean without a cleanup cron.
 - **P2 DEFERRED — Extract routers/auth.py**: Auth section (~350 lines) not extracted this iteration due to risk of breaking JWT/Google login flow. Will attempt in Iter 20 after adding a full auth backend test suite as a safety net.
+- **BONUS FIX — Concurrent register race**: Testing agent found pre-existing race: `users.referral_code` index used `sparse=True` which still treats `null` as present, causing DuplicateKeyError under concurrent registrations. Fixed by: (a) omitting `referral_code` from initial insert doc (uses `ensure_referral_code` after insert), (b) recreating the index with `partialFilterExpression={referral_code: {$type: "string"}}`. Verified index_information() shows the new partial filter.
 
 ## Backlog / next tasks
 - **P2 (still open)**: Extract `routers/auth.py` — need full auth test suite as safety net first.
