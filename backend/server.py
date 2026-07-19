@@ -418,8 +418,18 @@ class ChooseMethodInput(BaseModel):
 class PaymentConfigInput(BaseModel):
     qris_image_base64: Optional[str] = None  # data URL
     qris_notes: Optional[str] = ""
-    midtrans_fee_percent: float = 5.0
+    midtrans_fee_percent: float = Field(default=5.0, ge=0, le=100)
     manual_bank_info: Optional[str] = ""
+
+
+class InvoiceConfigInput(BaseModel):
+    day_of_month: int = Field(default=1, ge=1, le=28)
+    due_days: int = Field(default=7, ge=1, le=60)
+    enabled: bool = True
+
+
+class GeneralConfigInput(BaseModel):
+    default_new_user_password: str = Field(default="patungan123", min_length=6)
 
 
 class CreateAdminInput(BaseModel):
@@ -456,9 +466,57 @@ async def _reminder_scheduler_loop():
         except Exception as e:
             logger.warning(f"scheduler tick failed: {e}")
         try:
+            await _run_invoice_generator(actor=None)
+        except Exception as e:
+            logger.warning(f"invoice generator tick failed: {e}")
+        try:
             await asyncio.wait_for(_scheduler_stop.wait(), timeout=3600)
         except asyncio.TimeoutError:
             continue
+
+
+async def _run_invoice_generator(actor: Optional[dict] = None, force: bool = False) -> dict:
+    """Generate invoices for active subscriptions on configured day of month.
+    Idempotent: skips if a payment for (subscription_id, period_label) already exists."""
+    cfg = await db.settings.find_one({"key": "invoice_config"}) or {}
+    if not cfg.get("enabled", True) and not force:
+        return {"count": 0, "skipped": "disabled"}
+    day = int(cfg.get("day_of_month", 1) or 1)
+    due_days = int(cfg.get("due_days", 7) or 7)
+    now = now_utc()
+    if not force and now.day != day:
+        return {"count": 0, "skipped": f"not scheduled day (today={now.day}, target={day})"}
+    period_label = now.strftime("%b %Y")  # e.g. "Feb 2026"
+    active_subs = await db.subscriptions.find({"status": "active"}).to_list(None)
+    created = []
+    skipped = []
+    for sub in active_subs:
+        exists = await db.payments.find_one({
+            "subscription_id": str(sub["_id"]),
+            "period_label": period_label,
+        })
+        if exists:
+            skipped.append(str(sub["_id"]))
+            continue
+        due = now + timedelta(days=due_days)
+        doc = {
+            "subscription_id": str(sub["_id"]),
+            "amount": int(sub.get("price", 0)),
+            "base_amount": int(sub.get("price", 0)),
+            "period_label": period_label,
+            "due_date": due,
+            "status": "pending",
+            "created_at": now.isoformat(),
+            "receipt": None,
+            "payment_method": None,
+            "auto_generated": True,
+        }
+        res = await db.payments.insert_one(doc)
+        created.append(str(res.inserted_id))
+    await log_admin_action(actor, "invoice_generator_run", "payments", {
+        "period": period_label, "created": len(created), "skipped": len(skipped), "forced": force,
+    })
+    return {"count": len(created), "created": created, "skipped": len(skipped), "period": period_label}
 
 
 async def _run_due_reminders(actor: Optional[dict] = None) -> dict:
@@ -558,6 +616,20 @@ async def lifespan(app: FastAPI):
             "qris_notes": "Scan QRIS lalu upload bukti transfer. Otomatis diverifikasi.",
             "manual_bank_info": "",
             "midtrans_fee_percent": 5.0,
+        })
+    # Seed default invoice_config (auto-generate on 1st, due in 7 days)
+    if not await db.settings.find_one({"key": "invoice_config"}):
+        await db.settings.insert_one({
+            "key": "invoice_config",
+            "day_of_month": 1,
+            "due_days": 7,
+            "enabled": True,
+        })
+    # Seed default general_config (bulk-import default password)
+    if not await db.settings.find_one({"key": "general_config"}):
+        await db.settings.insert_one({
+            "key": "general_config",
+            "default_new_user_password": "patungan123",
         })
     # Seed default reminder config
     if not await db.settings.find_one({"key": "reminder_config"}):
@@ -1226,6 +1298,136 @@ async def export_payments_csv(admin: dict = Depends(require_admin)):
 async def scheduler_run_now(admin: dict = Depends(require_admin)):
     result = await _run_due_reminders(actor=admin)
     return {"ok": True, **result}
+
+
+@api.post("/admin/invoices/generate-now")
+async def invoices_generate_now(admin: dict = Depends(require_admin)):
+    """Force-run invoice generator ignoring day-of-month check. Still idempotent per (sub, period)."""
+    result = await _run_invoice_generator(actor=admin, force=True)
+    return {"ok": True, **result}
+
+
+@api.get("/admin/invoice-config")
+async def get_invoice_config(admin: dict = Depends(require_admin)):
+    cfg = await db.settings.find_one({"key": "invoice_config"}) or {}
+    return {
+        "day_of_month": int(cfg.get("day_of_month", 1) or 1),
+        "due_days": int(cfg.get("due_days", 7) or 7),
+        "enabled": bool(cfg.get("enabled", True)),
+    }
+
+
+@api.put("/admin/invoice-config")
+async def set_invoice_config(input: InvoiceConfigInput, admin: dict = Depends(require_admin)):
+    await db.settings.update_one(
+        {"key": "invoice_config"},
+        {"$set": {**input.model_dump(), "key": "invoice_config"}},
+        upsert=True,
+    )
+    await log_admin_action(admin, "update_invoice_config", "settings", input.model_dump())
+    return {"ok": True}
+
+
+@api.get("/admin/general-config")
+async def get_general_config(admin: dict = Depends(require_admin)):
+    cfg = await db.settings.find_one({"key": "general_config"}) or {}
+    return {"default_new_user_password": cfg.get("default_new_user_password", "patungan123")}
+
+
+@api.put("/admin/general-config")
+async def set_general_config(input: GeneralConfigInput, admin: dict = Depends(require_admin)):
+    await db.settings.update_one(
+        {"key": "general_config"},
+        {"$set": {**input.model_dump(), "key": "general_config"}},
+        upsert=True,
+    )
+    await log_admin_action(admin, "update_general_config", "settings", {"password_changed": True})
+    return {"ok": True}
+
+
+# ---------------- Admin: Users bulk import + template ---------------- #
+@api.get("/admin/users/template.csv")
+async def users_import_template(admin: dict = Depends(require_admin)):
+    header = ["name", "email", "username", "whatsapp", "gender", "password"]
+    sample = [
+        ["Budi Santoso", "budi@example.com", "budi", "628123456789", "male", ""],
+        ["Ani Wijaya", "ani@example.com", "", "", "female", "mypassword"],
+    ]
+    resp = _csv_stream(header, sample)
+    resp.headers["Content-Disposition"] = 'attachment; filename="users_template.csv"'
+    return resp
+
+
+class BulkUserImportInput(BaseModel):
+    file_base64: str  # CSV file as data URL or raw base64
+    file_name: Optional[str] = "users.csv"
+
+
+@api.post("/admin/users/import")
+async def import_users_csv(input: BulkUserImportInput, admin: dict = Depends(require_admin)):
+    """Bulk import users from CSV. Skips rows with existing email or invalid data."""
+    import base64 as _b64
+    import csv as _csv
+    import io as _io
+    raw = input.file_base64
+    if "," in raw and raw.startswith("data:"):
+        raw = raw.split(",", 1)[1]
+    try:
+        content = _b64.b64decode(raw).decode("utf-8-sig")
+    except Exception:
+        raise HTTPException(400, "File tidak bisa dibaca (bukan CSV UTF-8)")
+    reader = _csv.DictReader(_io.StringIO(content))
+    if not reader.fieldnames or "email" not in [f.lower().strip() for f in reader.fieldnames]:
+        raise HTTPException(400, "Kolom 'email' wajib ada di header CSV.")
+    # Normalize header keys
+    def norm(k):
+        return (k or "").lower().strip()
+    gcfg = await db.settings.find_one({"key": "general_config"}) or {}
+    default_pw = gcfg.get("default_new_user_password", "patungan123")
+    created, skipped, errors = [], [], []
+    for i, raw_row in enumerate(reader, start=2):  # start=2 because row 1 is header
+        row = {}
+        for k, v in raw_row.items():
+            if isinstance(v, list):
+                v = v[0] if v else ""
+            row[norm(k)] = (v or "").strip() if isinstance(v, str) else ""
+        email = row.get("email", "").lower()
+        name = row.get("name", "") or email.split("@")[0]
+        if not email or "@" not in email:
+            errors.append({"row": i, "reason": "email invalid", "email": email})
+            continue
+        if await db.users.find_one({"email": email}):
+            skipped.append({"row": i, "reason": "email exists", "email": email})
+            continue
+        pw = row.get("password") or default_pw
+        try:
+            doc = {
+                "email": email,
+                "password_hash": hash_password(pw),
+                "name": name,
+                "username": row.get("username") or email.split("@")[0],
+                "whatsapp": row.get("whatsapp") or "",
+                "gender": row.get("gender") or "",
+                "role": "user",
+                "extra": {},
+                "created_at": now_utc().isoformat(),
+                "imported": True,
+            }
+            r = await db.users.insert_one(doc)
+            created.append({"row": i, "email": email, "id": str(r.inserted_id)})
+        except Exception as e:
+            errors.append({"row": i, "reason": str(e), "email": email})
+    await log_admin_action(admin, "import_users_csv", "users", {
+        "created": len(created), "skipped": len(skipped), "errors": len(errors), "default_pw_used": True,
+    })
+    return {
+        "ok": True,
+        "created": created,
+        "skipped": skipped,
+        "errors": errors,
+        "summary": {"created": len(created), "skipped": len(skipped), "errors": len(errors)},
+        "default_password_used": default_pw,
+    }
 
 
 # ---------------- Google Auth (Emergent-managed) ---------------- #

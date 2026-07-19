@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { PlusCircle, Trash, PencilSimple, DownloadSimple, X, ShieldStar } from "@phosphor-icons/react";
+import { PlusCircle, Trash, PencilSimple, DownloadSimple, X, ShieldStar, UploadSimple, FileText } from "@phosphor-icons/react";
 import { Modal, F, SearchInput } from "./shared";
 
 export default function UsersTab() {
   const [users, setUsers] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [selected, setSelected] = useState([]);
   const [q, setQ] = useState("");
@@ -39,6 +40,14 @@ export default function UsersTab() {
   const exportCSV = () => {
     window.open(`${process.env.REACT_APP_BACKEND_URL}/api/admin/users/export.csv?_=${Date.now()}`, "_blank");
   };
+  const downloadTemplate = async () => {
+    try {
+      const { data } = await api.get("/admin/users/template.csv", { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([data]));
+      const a = document.createElement("a"); a.href = url; a.download = "users_template.csv"; a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (e) { toast.error("Gagal download template"); }
+  };
   const toggle = (id) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
   const selectableIds = filtered.filter((u) => u.role !== "admin").map((u) => u.id);
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.includes(id));
@@ -57,6 +66,12 @@ export default function UsersTab() {
               <Trash weight="bold" /> Hapus {selected.length}
             </button>
           )}
+          <button data-testid="users-template-csv" onClick={downloadTemplate} className="brutal-btn brutal-btn-white text-sm">
+            <FileText weight="bold" /> Template CSV
+          </button>
+          <button data-testid="users-import-csv" onClick={() => setShowImportModal(true)} className="brutal-btn brutal-btn-blue text-sm">
+            <UploadSimple weight="bold" /> Import CSV
+          </button>
           <button data-testid="users-export-csv" onClick={exportCSV} className="brutal-btn brutal-btn-white text-sm">
             <DownloadSimple weight="bold" /> Export CSV
           </button>
@@ -107,7 +122,76 @@ export default function UsersTab() {
       </div>
       {showModal && <UserModal user={editing} onClose={() => setShowModal(false)} onSaved={() => { setShowModal(false); load(); }} />}
       {showAdminModal && <AdminModal onClose={() => setShowAdminModal(false)} onSaved={() => { setShowAdminModal(false); load(); }} />}
+      {showImportModal && <ImportModal onClose={() => setShowImportModal(false)} onDone={() => { setShowImportModal(false); load(); }} />}
     </div>
+  );
+}
+
+function ImportModal({ onClose, onDone }) {
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!file) return toast.error("Pilih file CSV dulu.");
+    setBusy(true);
+    try {
+      const b64 = await new Promise((res, rej) => {
+        const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file);
+      });
+      const { data } = await api.post("/admin/users/import", { file_base64: b64, file_name: file.name });
+      setResult(data);
+      toast.success(`Selesai: ${data.summary.created} dibuat, ${data.summary.skipped} dilewati, ${data.summary.errors} error.`);
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal onClose={onClose} title="Import User (CSV)">
+      {!result ? (
+        <form onSubmit={submit} className="space-y-3" data-testid="import-modal-form">
+          <div className="brutal-sm bg-[#FFD60A]/40 p-3 text-sm">
+            Upload CSV dengan kolom <code>name, email, username, whatsapp, gender, password</code>. Hanya <b>email</b> yang wajib. Baris dengan email duplikat akan dilewati. Password kosong akan pakai <b>default</b> yang bisa diatur di tab <b>Auto Invoice</b>.
+          </div>
+          <label className="brutal-btn brutal-btn-blue cursor-pointer w-full justify-center" data-testid="import-file-input-label">
+            <UploadSimple weight="bold" /> {file ? file.name : "Pilih file CSV"}
+            <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => setFile(e.target.files[0])} data-testid="import-file-input" />
+          </label>
+          <button type="submit" disabled={busy} className="brutal-btn brutal-btn-red w-full justify-center" data-testid="import-submit">
+            {busy ? "Mengimpor..." : "Mulai Import"}
+          </button>
+        </form>
+      ) : (
+        <div className="space-y-3" data-testid="import-result">
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="brutal-sm bg-[#34C759] text-white p-3">
+              <div className="font-display font-black text-2xl">{result.summary.created}</div>
+              <div className="text-xs font-mono uppercase">Dibuat</div>
+            </div>
+            <div className="brutal-sm bg-[#FFD60A] p-3">
+              <div className="font-display font-black text-2xl">{result.summary.skipped}</div>
+              <div className="text-xs font-mono uppercase">Dilewati</div>
+            </div>
+            <div className="brutal-sm bg-[#FF3B30] text-white p-3">
+              <div className="font-display font-black text-2xl">{result.summary.errors}</div>
+              <div className="text-xs font-mono uppercase">Error</div>
+            </div>
+          </div>
+          {result.summary.created > 0 && (
+            <div className="text-xs text-gray-700">Password default digunakan untuk yang kosong: <code>{result.default_password_used}</code></div>
+          )}
+          {(result.skipped.length + result.errors.length) > 0 && (
+            <div className="brutal-sm bg-white p-3 max-h-48 overflow-y-auto text-xs">
+              {result.skipped.map((s, i) => <div key={"s"+i}>Row {s.row}: {s.email} — <span className="text-yellow-800">{s.reason}</span></div>)}
+              {result.errors.map((s, i) => <div key={"e"+i}>Row {s.row}: {s.email} — <span className="text-red-800">{s.reason}</span></div>)}
+            </div>
+          )}
+          <button onClick={onDone} className="brutal-btn brutal-btn-red w-full justify-center" data-testid="import-done">Selesai</button>
+        </div>
+      )}
+    </Modal>
   );
 }
 
