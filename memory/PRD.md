@@ -221,14 +221,33 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
   - AssignModal fetches only unassigned candidates, shows real-time slot counts per role, disables role radio when its slots are full.
 - **Testing**: 9/9 iter15 backend tests PASS + 100% frontend flows verified. One design bug (meta duplication) identified + fixed same iteration.
 
+## Iteration 16 (2026-02-19) — Email Verification + SEO Root + More Sortable Tables
+- **P0 Email verification for manual signup**:
+  - `POST /auth/register` no longer auto-logins. Creates user with `email_verified:false`, `auth_provider:'manual'`, then generates a 24h SHA256-hashed token in `db.email_verifications` and emails a `/verify-email?token=...` link.
+  - `POST /auth/verify-email` — validates token, marks user verified, sets auth cookie, and returns user+token for auto-login.
+  - `POST /auth/resend-verification` — rate-limited 1 per email per 3 minutes. Uniform response (no `rate_limited:true` leak) to prevent email enumeration.
+  - `POST /auth/login` blocks users with `auth_provider='manual'` AND `email_verified:false` (403). Legacy users without `auth_provider` field still pass through unchanged.
+  - Google auth path auto-sets `email_verified:true` + `email_verified_at` on user upsert.
+  - Frontend: new pages `/verify-email` (auto-verifies + auto-logins) and `/register-check-email?email=...` (post-signup "cek inbox" screen with 3-step guide + resend button). Registration flow no longer navigates to `/dashboard`; goes to check-email page.
+- **P1 SEO discoverability at root**:
+  - Static `frontend/public/robots.txt` — serves at `patungandigital.id/robots.txt`, points to `Sitemap: https://patungandigital.id/api/sitemap.xml`. Google Search Console accepts sitemap anywhere.
+  - `SEO` component now injects `<meta name="google-site-verification">` when `REACT_APP_GSC_VERIFY` env var is set — one-line domain verification.
+  - New setup guide: `/app/docs/google-search-console-guide.md` with 5-step verification + submit + tips + troubleshooting matrix.
+- **P2 Sortable headers on more tabs**:
+  - Payments tab: `sort-user`, `sort-service_name`, `sort-amount`, `sort-due_date`, `sort-status` — with numeric accessor for amount.
+  - Subscriptions tab: `sort-user`, `sort-service`, `sort-price`, `sort-start`, `sort-status` — with nested accessors for `user.name` and `service.name`.
+  - Users tab (from iter15) still has full sort coverage.
+- **Testing**: 12/12 iter16 backend tests PASS + 100% frontend flows. 1 minor enumeration leak in `resend-verification` was identified by testing agent and fixed same iteration.
+
 ## Backlog / next tasks
-- **P2 (still open)**: Sort headers on Payments, Subscriptions, Services, Waitlist, Blog, Testimonials, Announcements tabs (only Users has it currently — pattern is ready via the shared hook).
-- **P2 (still open)**: Extract `deps.py` + `models.py` + `routers/auth.py` + `routers/payments.py` — server.py is 1908 lines.
+- **P1 (still open)**: Extend sort headers to Waitlist + Testimonials + Announcements (card grids need a "Sort by" dropdown, not column headers).
+- **P2 (still open)**: Extract `deps.py` + `models.py` + `routers/auth.py` — server.py is now ~2015 lines and continues to grow with verification helpers.
 - **P3**: Object Storage for base64 media.
-- **P3**: Broadcast fan-out email (SendGrid) for critical announcements.
-- **P3**: Auto-refresh `applied_to_sub_at` guard ordering (write flag first, rollback on failure).
-- **P4 (new)**: Expose `default_host_slots` / `default_regular_slots` in Service create/edit modal so admins can tune what auto-created groups inherit.
-- **P4 (new)**: Bulk actions in Groups (e.g. pause all groups for a service).
+- **P3**: SendGrid fallback / dead-letter queue for failed verification emails (currently silent-fail).
+- **P3**: Bounce-detection for invalid emails so unverified users don't accumulate.
+- **P3**: Full-domain sitemap alias — serve at `/sitemap.xml` (root) via a build-time static file that mirrors `/api/sitemap.xml`. Requires a build hook or nginx rewrite.
+- **P4 (from iter15)**: Expose `default_host_slots` / `default_regular_slots` in Service edit modal.
+
 
 
 

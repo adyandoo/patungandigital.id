@@ -1061,10 +1061,12 @@ async def resend_verification(input: ResendVerificationInput):
         "created_at": {"$gte": now_utc() - timedelta(minutes=3)},
     })
     if recent:
-        return {"ok": True, "rate_limited": True, "message": "Cek email untuk link terbaru."}
+        # Uniform response — do NOT expose rate_limited to prevent email enumeration
+        return {"ok": True, "message": "Jika email terdaftar dan belum diverifikasi, kami sudah mengirim link baru."}
     user = await db.users.find_one({"email": email})
     if user and not user.get("email_verified"):
         await _send_verification_email(str(user["_id"]), email, user.get("name", ""))
+    # Uniform response — no enumeration
     return {"ok": True, "message": "Jika email terdaftar dan belum diverifikasi, kami sudah mengirim link baru."}
 
 
