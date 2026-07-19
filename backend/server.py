@@ -834,6 +834,11 @@ async def lifespan(app: FastAPI):
             "key": "general_config",
             "default_new_user_password": "patungan123",
         })
+    # Ensure unique index on blog_posts.slug
+    try:
+        await db.blog_posts.create_index("slug", unique=True)
+    except Exception as e:
+        logger.warning(f"blog_posts slug index: {e}")
     # Seed default reminder config
     if not await db.settings.find_one({"key": "reminder_config"}):
         await db.settings.insert_one({

@@ -176,14 +176,40 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - **Onboarding checklist**: Step 2 label changed from "Lengkapi nomor WhatsApp" → "Lengkapi profil (nama, WhatsApp, gender)" and completes when either field is set — no longer WhatsApp-only gating.
 - **Testing**: 15/15 iter13 backend tests PASS + frontend UI 100% verified. Minor issues flagged by testing agent were fixed same iteration (duration_months on sub, dead WA payload, whatsapp_sent key, image-only guard, onboarding label).
 
+## Iteration 14 (2026-02-19) — About + Blog + Announcements + Rate-Limit + Date Picker
+- **P2a Date picker (Shadcn Calendar + Indonesian locale)**:
+  - New `DatePicker` component wraps Shadcn Calendar + Popover using `date-fns/locale/id`. Format: "19 Juli 2026". Clear button.
+  - Replaces `<input type="date">` in AdminDashboard Payments modal (`pay-modal-due-date`) and Subscriptions modal (`sub-modal-start`, `sub-modal-end`).
+- **P2b Refactor (conservative)**: Deferred to next iteration per user choice. server.py is now 1826 lines; extracted 6 routers (analytics, groups, referral, webhooks, testimonials, cms, settings, admin_users).
+- **P3 Rate-limit forgot-password**: `POST /auth/forgot-password` now short-circuits if a token was issued for the same email within the last 5 minutes (checks `db.password_resets.created_at`). Response is still 200 (`rate_limited:true`) — no enumeration.
+- **P4 About page**:
+  - Public `GET /api/about` returns `{hero_title, story (markdown), mission (markdown), contact_email, contact_whatsapp, contact_address}` with sensible defaults.
+  - Admin `PUT /api/admin/about` — new AboutTab in AdminDashboard for editing.
+  - Public route `/about` renders hero + story (react-markdown + remark-gfm) + mission + contact cards + back-to-home CTA.
+- **P5 Blog with markdown + tags + cover**:
+  - Collection `blog_posts` with unique index on `slug`. Tags auto-lowercased on write.
+  - Admin CRUD `/admin/blog` (create/list/edit/delete/toggle publish). Auto-slug from title with unique fallback (unix ts suffix). Duplicate slug on PATCH → 400.
+  - Public `/blog` (paginated list with tag cloud) + `/blog/{slug}` (detail). Only `published:true` visible publicly.
+  - Admin BlogTab modal has: title, slug (auto), tags (comma-sep), excerpt, cover image upload, markdown content with live preview toggle.
+  - Tailwind Typography plugin added — markdown headings/lists/quotes now render with proper hierarchy.
+- **P6 Announcements**:
+  - Collection `announcements` with target: `all` | `service_ids` (multi-service). Severity: info | warning | critical. Optional `expires_at`.
+  - Admin CRUD `/admin/announcements` with new AnnouncementsTab (form + list + edit + delete + service checkboxes).
+  - User `GET /me/announcements` returns matching active + not-dismissed (or `?only_active=false` to include archive with `dismissed:true` flag). Scoping uses user's active subscriptions.
+  - `POST /me/announcements/{id}/dismiss` adds user_id to `dismissed_by`.
+  - UserDashboard: top-level `announcement-banners` strip on all tabs with severity color-coding + Tutup button; new "Pengumuman" tab shows archive (`announcements-panel`).
+- **Navigation**: Navbar + footer now have Blog + Tentang links (data-testids `nav-blog`, `nav-about`, `footer-blog`, `footer-about`).
+- **Testing**: 20/20 iter14 backend tests PASS + all frontend flows 100% verified.
+
 ## Backlog / next tasks
-- **P2 (design polish, still open from iter12)**: Replace `<input type="date">` in Payments/Subscriptions modals with Shadcn Calendar + Indonesian locale.
-- **P2 (from iter13 code review)**: Extract `db`, `get_current_user`, `require_admin`, model classes to `backend/deps.py` + `backend/models.py`. Server.py is 1770 lines — 5 routers already but core coupling remains.
-- **P2**: Extract remaining monolith slices: `routers/auth.py` (login/register/change-pw/reset), `routers/payments.py`, `routers/subscriptions.py`.
-- **P3**: Object storage for base64 receipts + QRIS + profile pictures (still deferred).
-- **P3**: Rate-limit `/auth/forgot-password` (1 token per email per 5 min).
-- **P3**: Explicit business-rule for renew endpoint (block on status='cancelled'?).
-- **P3**: `min` server-side check for image content-type (currently only base64 length + `data:image/` prefix — could reject with MIME sniffing via `imghdr`).
+- **P2 (from iter13, still open)**: Extract `deps.py` + `models.py` + `routers/auth.py` + `routers/payments.py` (server.py grew back to 1826 lines with new models).
+- **P2 (from iter14 code review)**: Consolidate severity/target Pydantic validators (currently duplicated between defaults + manual 422). Move announcements dismissals to separate collection with compound index (`announcements.dismissed_by` can bloat for popular "all" broadcasts).
+- **P3**: Object Storage for base64 media (receipts, QRIS, profile pics, blog covers).
+- **P3**: Rate-limit other sensitive endpoints (login attempts, testimonial spam).
+- **P3**: Blog TOC + reading-time estimate + related posts by tag.
+- **P3**: Announcements email fan-out (SendGrid) for critical broadcasts.
+- **P4 (from iter14 review)**: SubscriptionsTab `<option>` inspector artifact — cosmetic dev-only, ignore.
+
 
 
 

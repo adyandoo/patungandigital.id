@@ -121,6 +121,7 @@ async def admin_create_blog(input: BlogPostInput, admin: dict = Depends(require_
     now = now_utc()
     doc = input.model_dump()
     doc["slug"] = slug
+    doc["tags"] = [t.strip().lower() for t in (doc.get("tags") or []) if t and t.strip()]
     doc["author_id"] = admin["id"]
     doc["author_name"] = admin.get("name") or "Admin"
     doc["created_at"] = now.isoformat()
@@ -139,6 +140,8 @@ async def admin_update_blog(post_id: str, input: BlogPostUpdate, admin: dict = D
     updates = {k: v for k, v in input.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(400, "Tidak ada field untuk diupdate")
+    if "tags" in updates:
+        updates["tags"] = [t.strip().lower() for t in updates["tags"] if t and t.strip()]
     updates["updated_at"] = now_utc().isoformat()
     # If publishing for first time, stamp published_at
     if updates.get("published") is True:
