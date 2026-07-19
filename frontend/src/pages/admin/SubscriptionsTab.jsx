@@ -75,7 +75,7 @@ function SubModal({ users, services, onClose, onSaved }) {
   const [form, setForm] = useState({
     user_id: "", service_id: "", role: "regular", group_id: "",
     start_date: new Date().toISOString().slice(0, 10),
-    end_date: "", price: 0, status: "active",
+    end_date: "", price: 0, status: "active", duration_months: 1,
   });
   const [suggested, setSuggested] = useState([]);
 
@@ -91,6 +91,7 @@ function SubModal({ users, services, onClose, onSaved }) {
     try {
       const payload = {
         ...form, price: Number(form.price),
+        duration_months: Number(form.duration_months) || 1,
         group_id: form.group_id || null,
         start_date: new Date(form.start_date).toISOString(),
         end_date: form.end_date ? new Date(form.end_date).toISOString() : null,
@@ -121,6 +122,7 @@ function SubModal({ users, services, onClose, onSaved }) {
             </select>
           </F>
           <F label="Harga (Rp)"><input type="number" className="brutal-input" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} /></F>
+          <F label="Durasi default (bulan)"><input type="number" min={1} max={24} className="brutal-input" value={form.duration_months} onChange={(e) => setForm({ ...form, duration_months: e.target.value })} data-testid="sub-modal-duration" /></F>
         </div>
         <F label="Assign ke group (opsional)">
           <select className="brutal-input" value={form.group_id} onChange={(e) => setForm({ ...form, group_id: e.target.value })} data-testid="submod-group">

@@ -15,7 +15,6 @@ export default function ReminderTab() {
       await api.put("/admin/reminder-config", {
         days_before_due: Number(cfg.days_before_due),
         enable_email: !!cfg.enable_email,
-        enable_whatsapp: !!cfg.enable_whatsapp,
         reminder_message: cfg.reminder_message,
       });
       toast.success("Konfigurasi tersimpan");

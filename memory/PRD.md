@@ -162,13 +162,29 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - **P3 Payments filter**: `GET /api/admin/payments?auto_generated=true|false` + new dropdown `[payments-source-filter]` in Admin Payments tab (Semua | Auto-generated | Manual). Rows also show `auto` badge + duration badge (`3 bln`) when relevant.
 - **Testing**: 16/16 iter12 backend PASS, frontend flows verified (100% success). No regressions.
 
+## Iteration 13 (2026-02-19) — Testimonials + Profile Pics + Expiry Banner + WA Removal
+- **WhatsApp removed (P1)**: All Twilio branches deleted from `_send_reminder`, `enable_whatsapp` unset on migration, ReminderTab checkbox removed, save payload no longer sends the field, scheduler summary no longer includes `whatsapp_sent`. WhatsApp phone number kept on user profile as contact only (not for notifications).
+- **Expiry banner + Perpanjang (P2)**: `invoice_config.expiry_warning_days` (default 7, admin-tunable 1-30 via AutoInvoiceTab). New public `GET /api/payment-config` field surfaces this to users. UserDashboard SubsPanel renders a yellow warning banner when a sub's `end_date` is within N days, red banner when expired, both with **Perpanjang sekarang** button (`data-testid=renew-btn-{subId}`) → `POST /api/me/subscriptions/{id}/renew` creates a pending payment (`renew_by_user=true`, `duration_months` inherited from sub or override, amount = price × duration, period_label = next-period in WIB).
+- **Testimonials (P3)**: New `routers/testimonials.py`:
+  - Public `GET /api/testimonials` returns `{items, stats:{avg,count}}` — approved-only, with author name + `profile_picture_base64`, avg rounded to 2 decimals.
+  - `POST /me/testimonials` (requires ≥1 subscription), `GET /me/testimonials`, `PATCH /me/testimonials/{id}` (blocks edits when already approved; edit resets to pending), `DELETE /me/testimonials/{id}` (allowed even for approved — user retracting).
+  - `GET/PATCH/DELETE /admin/testimonials` — approve/reject/delete.
+  - Rating bounded 1–5, comment 10–500 chars.
+  - UI: **Testimoni** tab in UserDashboard (rating stars + textarea + own list with edit/delete). **Testimoni** tab in AdminDashboard (filter by status, approve/reject/delete). Homepage `testimonials-section` renders a marquee of approved cards + rating average badge (only visible if items exist).
+- **Profile pictures (P4)**: `PUT /api/auth/profile-picture` accepts data URL (max ~500KB) or null to clear. Strict `data:image/` prefix validation. Client-side resize to 512×512 JPEG at q=0.85 before upload. New reusable **`Avatar`** component with deterministic initials-gradient fallback (8 curated palettes hashed from name). Placed in UserDashboard header + Profile tab + Testimoni cards + admin Testimonials tab + homepage marquee. Admin cannot set other users' pictures (per user choice).
+- **Duration on subs (from testing agent feedback)**: `SubscriptionInput` + `SubscriptionUpdate` now accept `duration_months` (1–24). AdminDashboard Subscriptions modal has "Durasi default (bulan)" input. Auto-invoice generator now correctly carries this value into generated payments.
+- **Onboarding checklist**: Step 2 label changed from "Lengkapi nomor WhatsApp" → "Lengkapi profil (nama, WhatsApp, gender)" and completes when either field is set — no longer WhatsApp-only gating.
+- **Testing**: 15/15 iter13 backend tests PASS + frontend UI 100% verified. Minor issues flagged by testing agent were fixed same iteration (duration_months on sub, dead WA payload, whatsapp_sent key, image-only guard, onboarding label).
+
 ## Backlog / next tasks
-- **P2 (design polish)**: Replace browser-default `<input type="date">` in Admin Payments modal with Shadcn Calendar / date-picker (Indonesian locale). Reported by testing agent — minor UX inconsistency.
-- **P2**: Rate-limit `/auth/forgot-password` (e.g. 1 token per email per 5 min) to prevent log/quota abuse.
-- **P2**: Move shared deps (`db`, `require_admin`, model classes) from server.py into `backend/deps.py` + `backend/models.py` to remove tight coupling. Enables extracting `routers/payments.py`, `routers/auth.py`, `routers/subscriptions.py` next.
-- **P3**: Object Storage migration for base64 receipts + QRIS image (deferred by user in iter11).
-- **P3**: Test-only debug endpoint to inject reset token into DB so E2E forgot→reset flow can be fully automated by testing agent without SendGrid.
-- **P1 (paused by user)**: Twilio credentials for live WhatsApp reminders.
+- **P2 (design polish, still open from iter12)**: Replace `<input type="date">` in Payments/Subscriptions modals with Shadcn Calendar + Indonesian locale.
+- **P2 (from iter13 code review)**: Extract `db`, `get_current_user`, `require_admin`, model classes to `backend/deps.py` + `backend/models.py`. Server.py is 1770 lines — 5 routers already but core coupling remains.
+- **P2**: Extract remaining monolith slices: `routers/auth.py` (login/register/change-pw/reset), `routers/payments.py`, `routers/subscriptions.py`.
+- **P3**: Object storage for base64 receipts + QRIS + profile pictures (still deferred).
+- **P3**: Rate-limit `/auth/forgot-password` (1 token per email per 5 min).
+- **P3**: Explicit business-rule for renew endpoint (block on status='cancelled'?).
+- **P3**: `min` server-side check for image content-type (currently only base64 length + `data:image/` prefix — could reject with MIME sniffing via `imghdr`).
+
 
 
 

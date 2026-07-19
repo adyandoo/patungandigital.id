@@ -78,7 +78,7 @@ export default function UserDashboard() {
 
 function OnboardingCard({ data, goToTab }) {
   const nextAction = {
-    profile: { tab: "profile", label: "Isi WhatsApp sekarang" },
+    profile: { tab: "profile", label: "Lengkapi profil sekarang" },
     first_payment: { tab: "payments", label: "Lihat tagihan" },
     invite: { tab: "referral", label: "Ambil kode referral" },
     reward: { tab: "referral", label: "Ajak lebih banyak teman" },

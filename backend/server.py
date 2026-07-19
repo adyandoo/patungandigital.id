@@ -462,6 +462,7 @@ class SubscriptionInput(BaseModel):
     end_date: Optional[datetime] = None
     price: float
     status: str = "active"
+    duration_months: int = Field(default=1, ge=1, le=24)
 
 
 class SubscriptionUpdate(BaseModel):
@@ -474,6 +475,7 @@ class SubscriptionUpdate(BaseModel):
     end_date: Optional[datetime] = None
     price: Optional[float] = None
     status: Optional[str] = None
+    duration_months: Optional[int] = Field(default=None, ge=1, le=24)
 
 
 class GroupInput(BaseModel):
@@ -689,7 +691,7 @@ async def _run_due_reminders(actor: Optional[dict] = None) -> dict:
     for p in to_send:
         try:
             r = await _send_reminder_for_payment(str(p["_id"]), actor=actor)
-            sent.append({"payment_id": str(p["_id"]), **{k: r.get(k) for k in ("email_sent", "whatsapp_sent", "mocked")}})
+            sent.append({"payment_id": str(p["_id"]), **{k: r.get(k) for k in ("email_sent", "mocked")}})
         except Exception as e:
             logger.warning(f"scheduler send failed for {p['_id']}: {e}")
     # H-7 admin group expiry reminders (log-only for now)
@@ -992,8 +994,8 @@ async def set_profile_picture(input: ProfilePicInput, user: dict = Depends(get_c
     # Basic size guard (base64 ~1.33x binary size)
     if len(b64) > 700_000:
         raise HTTPException(413, "Foto terlalu besar. Maks ~500KB setelah resize.")
-    if not (b64.startswith("data:image/") or len(b64) < 700_000):
-        raise HTTPException(400, "Format foto tidak valid.")
+    if not b64.startswith("data:image/"):
+        raise HTTPException(400, "Format foto tidak valid. Harus data URL gambar.")
     await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"profile_picture_base64": b64}})
     u = await db.users.find_one({"_id": ObjectId(user["id"])})
     return user_out(u)
