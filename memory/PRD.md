@@ -144,13 +144,31 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - **Deferred**: P2 (server.py refactor to `routers/payments.py` + `routers/settings.py`) — server.py now 1615 lines. P3 (object storage for base64 receipts + QRIS) — user chose to defer.
 - **Testing**: 22/22 iter11 backend tests PASS + frontend smoke confirmed (Auto Invoice tab renders, Users import modal displays 3/0/0 result panel + toast). No regressions.
 
+## Iteration 12 (2026-02-19) — Duration Flow + Password Reset + TZ-aware Scheduler + Refactor
+- **P0 Subscription duration (per-payment)**:
+  - New `Payment.duration_months` field (default 1, bounded 1–24). Admin picks duration when creating a payment (UI field in Payments modal + Auto-invoice inherits from `sub.duration_months`).
+  - `extend_subscription_from_payment()` runs whenever a payment transitions to **paid** (via manual upload, admin PATCH, or Midtrans webhook). Sets `sub.start_date = first_paid_at` (only if empty/future), and extends `sub.end_date = max(current_end, now) + duration_months` using `dateutil.relativedelta`. Idempotent per payment via `applied_to_sub_at` flag.
+  - `revert_subscription_extension()` runs when admin flips paid → non-paid (refund/reject) — rolls back the extension deterministically.
+- **P0 Admin edits & password reset**:
+  - Existing admin user modal continues to allow editing `name, email, username, whatsapp, gender, role` — password is NEVER shown or set by admin here.
+  - New button per user row: **Reset password ke default** (data-testid `user-reset-pw-{id}`) → calls `POST /api/admin/users/{id}/reset-password`. Resets password to `general_config.default_new_user_password`, logs to admin_logs, sends SendGrid email (or mocks if key absent).
+  - New **Forgot password** flow at login: `data-testid=forgot-password-link` opens `ForgotModal` → `POST /auth/forgot-password` (always 200, no enumeration). Token hashed SHA256, 1h expiry, stored in `db.password_resets`. Email link points to `/reset-password?token=xxx`.
+  - New `/reset-password` route with token-based form → `POST /auth/reset-password` (verifies token, updates hash, marks used).
+- **P1 Refactor**: server.py trimmed to 1683 lines (was 1854). New router files:
+  - `routers/settings.py` — payment-config (public + admin), invoice-config, general-config.
+  - `routers/admin_users.py` — bulk import CSV, template CSV, admin reset password.
+  - Late-import pattern to avoid circular deps.
+- **P2 TZ-aware scheduler**: `WIB = ZoneInfo("Asia/Jakarta")` (UTC+7 fallback). `_run_invoice_generator` now checks `now.astimezone(WIB).day` against `day_of_month`. Response includes `timezone: "Asia/Jakarta"`. Added `last_run_period_label` short-circuit — same-period hourly ticks are no-ops after first run. Storage remains UTC ISO strings.
+- **P3 Payments filter**: `GET /api/admin/payments?auto_generated=true|false` + new dropdown `[payments-source-filter]` in Admin Payments tab (Semua | Auto-generated | Manual). Rows also show `auto` badge + duration badge (`3 bln`) when relevant.
+- **Testing**: 16/16 iter12 backend PASS, frontend flows verified (100% success). No regressions.
+
 ## Backlog / next tasks
-- **P2**: Extract admin config endpoints (`invoice-config`, `general-config`, `payment-config`) into `routers/settings.py`; extract bulk-import + template into `routers/admin_users.py`. server.py is 1615 lines — well past the 700-line guideline.
-- **P3**: Migrate base64 receipts + QRIS image to Emergent Object Storage (deferred by user).
-- **P2**: Add filter `?auto_generated=true` to Payments list + bulk delete UI for ops recovery.
-- **P3**: Timezone-aware scheduling — currently uses UTC for `day_of_month` check; consider Jakarta time for Indonesian admin UX.
-- **P3**: Add `last_run_period_label` short-circuit so invoice generator doesn't rescan every hour on the trigger day.
-- **P3**: Sanitize pymongo exception strings in `import_users_csv.errors[]` before returning to UI.
+- **P2 (design polish)**: Replace browser-default `<input type="date">` in Admin Payments modal with Shadcn Calendar / date-picker (Indonesian locale). Reported by testing agent — minor UX inconsistency.
+- **P2**: Rate-limit `/auth/forgot-password` (e.g. 1 token per email per 5 min) to prevent log/quota abuse.
+- **P2**: Move shared deps (`db`, `require_admin`, model classes) from server.py into `backend/deps.py` + `backend/models.py` to remove tight coupling. Enables extracting `routers/payments.py`, `routers/auth.py`, `routers/subscriptions.py` next.
+- **P3**: Object Storage migration for base64 receipts + QRIS image (deferred by user in iter11).
+- **P3**: Test-only debug endpoint to inject reset token into DB so E2E forgot→reset flow can be fully automated by testing agent without SendGrid.
 - **P1 (paused by user)**: Twilio credentials for live WhatsApp reminders.
+
 
 
