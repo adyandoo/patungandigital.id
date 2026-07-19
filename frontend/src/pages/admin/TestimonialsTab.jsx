@@ -1,20 +1,42 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { Star, CheckCircle, X, Trash, ChatCircleDots } from "@phosphor-icons/react";
+import { Star, CheckCircle, X, Trash, ChatCircleDots, SortAscending } from "@phosphor-icons/react";
 import Avatar from "@/components/Avatar";
 
 const STATUS_ORDER = ["pending", "approved", "rejected"];
+const SORT_OPTIONS = [
+  { key: "created_at_desc", label: "Terbaru" },
+  { key: "created_at_asc", label: "Terlama" },
+  { key: "rating_desc", label: "Rating ↓" },
+  { key: "rating_asc", label: "Rating ↑" },
+  { key: "name_asc", label: "Nama A-Z" },
+];
 
 export default function TestimonialsTab() {
   const [items, setItems] = useState([]);
   const [filter, setFilter] = useState("pending");
+  const [sortBy, setSortBy] = useState("created_at_desc");
 
   const load = () => {
     const q = filter === "all" ? "" : `?status=${filter}`;
     api.get(`/admin/testimonials${q}`).then((r) => setItems(r.data)).catch(() => setItems([]));
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [filter]);
+
+  const sorted = useMemo(() => {
+    const arr = [...items];
+    const [k, dir] = sortBy.startsWith("rating") ? ["rating", sortBy.endsWith("desc") ? -1 : 1]
+      : sortBy.startsWith("name") ? ["name", sortBy.endsWith("desc") ? -1 : 1]
+      : ["created_at", sortBy.endsWith("desc") ? -1 : 1];
+    arr.sort((a, b) => {
+      const va = k === "name" ? (a.user?.name || "") : k === "created_at" ? new Date(a.created_at || 0).getTime() : (a[k] || 0);
+      const vb = k === "name" ? (b.user?.name || "") : k === "created_at" ? new Date(b.created_at || 0).getTime() : (b[k] || 0);
+      if (typeof va === "string") return va.localeCompare(vb, "id") * dir;
+      return (va - vb) * dir;
+    });
+    return arr;
+  }, [items, sortBy]);
 
   const setStatus = async (t, status) => {
     try {
@@ -33,20 +55,33 @@ export default function TestimonialsTab() {
     <div data-testid="testimonials-tab">
       <div className="flex items-center justify-between flex-wrap gap-3 mb-6">
         <h2 className="font-display font-bold text-2xl flex items-center gap-2"><ChatCircleDots weight="duotone" /> Testimoni</h2>
-        <div className="flex gap-2">
-          {["all", ...STATUS_ORDER].map((s) => (
-            <button key={s} onClick={() => setFilter(s)}
-              className={`brutal-sm px-3 py-1 text-xs font-mono uppercase ${filter === s ? "bg-black text-white" : "bg-white"}`}
-              data-testid={`testimoni-filter-${s}`}>
-              {s}
-            </button>
-          ))}
+        <div className="flex gap-2 flex-wrap items-center">
+          <div className="flex gap-2">
+            {["all", ...STATUS_ORDER].map((s) => (
+              <button key={s} onClick={() => setFilter(s)}
+                className={`brutal-sm px-3 py-1 text-xs font-mono uppercase ${filter === s ? "bg-black text-white" : "bg-white"}`}
+                data-testid={`testimoni-filter-${s}`}>
+                {s}
+              </button>
+            ))}
+          </div>
+          <label className="brutal-sm bg-white px-2 py-1 flex items-center gap-2 text-xs font-mono">
+            <SortAscending size={14} />
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="bg-transparent outline-none uppercase"
+              data-testid="testimoni-sort"
+            >
+              {SORT_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          </label>
         </div>
       </div>
 
-      {items.length === 0 && <div className="brutal p-8 text-center text-gray-600">Kosong.</div>}
+      {sorted.length === 0 && <div className="brutal p-8 text-center text-gray-600">Kosong.</div>}
       <div className="grid md:grid-cols-2 gap-4">
-        {items.map((t) => (
+        {sorted.map((t) => (
           <div key={t.id} className="brutal p-5" data-testid={`admin-testimoni-${t.id}`}>
             <div className="flex items-center gap-3">
               <Avatar src={t.user?.profile_picture_base64} name={t.user?.name} size={44} />

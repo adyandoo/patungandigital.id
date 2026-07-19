@@ -245,9 +245,16 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - **Trigger**: `POST /api/auth/verify-email` — after user is marked verified, endpoint ensures referral_code exists (auto-generates via `ensure_referral_code`), then sends welcome email (try/except so SendGrid failures don't block verify flow), then sets idempotency flags `welcome_email_sent=True` + `welcome_email_sent_at` (ISO string).
 - **Testing**: 12/12 iter17 backend tests PASS. Manual curl end-to-end verified (test user welcome_test_1784446615@example.com received verified=True + welcome_email_sent=True + referral_code auto-generated).
 
+## Iteration 18 (2026-02-19) — Bug fixes + Ikut Patungan flow
+- **P0 FIX — Verify-email idempotent**: Endpoint `POST /api/auth/verify-email` now accepts token even if already used (as long as it belongs to a real user and not expired). Root cause: React StrictMode double-invoked useEffect + Gmail/corp email prefetchers caused the second POST to hit an already-consumed token → 400 error → user saw error page even though verification succeeded. Fixed backend (idempotent lookup) + frontend (useRef guard).
+- **P6 NEW — Admin manual email verify**: New endpoint `POST /api/admin/users/{user_id}/verify-email` — bypasses token flow, marks user verified, invalidates pending tokens, sends welcome email idempotently. UI: green envelope button in Admin → Users tab, appears only for unverified non-admin users. New "Verified" column shows Ya/Belum status.
+- **P1 NEW — Ikut Patungan self-service flow**: New endpoint `POST /api/me/subscriptions/join` accepts `{service_id, duration_months}`. Creates pending subscription (no group yet) + pending payment with correct amount = service.price_regular × months. Duplicate active/pending subs for same service blocked with 400. New `JoinModal` component in UserDashboard shows service picker + duration selector (1/3/6/12) + total price + confirmation → routes user to Payments tab to pick QRIS/Midtrans. Home CTA now routes logged-in users to `/dashboard?action=join`. Empty state in SubsPanel replaced with "Pilih Layanan" CTA.
+- **P3 FIX — Onboarding step**: `first_payment` step relabeled from "Bayar tagihan pertama" → "Ikut patungan pertama (pilih layanan)". Done-check now considers any existing subscription. Onboarding CTA now opens JoinModal.
+- **P4 NEW — Sort controls**: WaitlistTab uses `useSortableTable` for column headers (created_at, email, name, service, status). TestimonialsTab + AnnouncementsTab get "Sort by" dropdown (created_at, rating/severity, title, expires_at).
+- **P5 NEW — Welcome email retry queue**: New async fn `_retry_pending_welcome_emails` runs on each scheduler tick (1h). Finds verified users where `welcome_email_sent!=True` and `welcome_email_retries<3`, retries send, increments counter, marks `welcome_email_given_up` after 3 failed attempts. Skips users verified < 5 min ago to avoid racing the main handler.
+
 ## Backlog / next tasks
-- **P1 (still open)**: Extend sort headers to Waitlist + Testimonials + Announcements (card grids need a "Sort by" dropdown, not column headers).
-- **P2 (still open)**: Extract `deps.py` + `models.py` + `routers/auth.py` — server.py is now ~2015 lines and continues to grow with verification helpers.
+- **P2 (still open)**: Extract `routers/auth.py` — server.py is now ~2200 lines.
 - **P3**: Object Storage for base64 media.
 - **P3**: SendGrid fallback / dead-letter queue for failed verification emails (currently silent-fail).
 - **P3**: Bounce-detection for invalid emails so unverified users don't accumulate.

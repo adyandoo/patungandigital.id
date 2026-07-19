@@ -12,6 +12,7 @@ export default function UserDashboard() {
   const [payments, setPayments] = useState([]);
   const [onboarding, setOnboarding] = useState(null);
   const [announcements, setAnnouncements] = useState([]);
+  const [showJoin, setShowJoin] = useState(false);
 
   const loadAll = async () => {
     try {
@@ -36,6 +37,14 @@ export default function UserDashboard() {
   };
 
   useEffect(() => { loadAll(); }, []);
+  // Deep link support: /dashboard?action=join opens the join modal immediately
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("action") === "join") setShowJoin(true);
+    if (window.location.hash === "#join") setShowJoin(true);
+  }, []);
+
+  const openJoin = () => setShowJoin(true);
 
   return (
     <div className="px-6 md:px-12 py-10">
@@ -48,7 +57,10 @@ export default function UserDashboard() {
             <p className="text-gray-700 mt-1">Semua urusan patunganmu ada di sini.</p>
           </div>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-center">
+          <button onClick={openJoin} className="brutal-btn brutal-btn-red" data-testid="header-join-btn">
+            <Sparkle weight="fill" /> Ikut Patungan
+          </button>
           <StatChip label="Langganan aktif" value={subs.filter((s) => s.status === "active").length} />
           <StatChip label="Tagihan" value={payments.filter((p) => p.status === "pending").length} />
           {user?.referral_credit > 0 && (
@@ -59,7 +71,7 @@ export default function UserDashboard() {
 
       {/* Onboarding checklist */}
       {onboarding && onboarding.completed < onboarding.total && (
-        <OnboardingCard data={onboarding} goToTab={setTab} />
+        <OnboardingCard data={onboarding} goToTab={setTab} openJoin={openJoin} />
       )}
 
       {/* Announcement banners */}
@@ -93,7 +105,7 @@ export default function UserDashboard() {
       </div>
 
       <div className="mt-8">
-        {tab === "subs" && <SubsPanel subs={subs} reload={loadAll} />}
+        {tab === "subs" && <SubsPanel subs={subs} reload={loadAll} openJoin={openJoin} />}
         {tab === "groups" && <GroupsPanel />}
         {tab === "payments" && <PaymentsPanel payments={payments} reload={loadAll} />}
         {tab === "announcements" && <AnnouncementsPanel />}
@@ -102,14 +114,16 @@ export default function UserDashboard() {
         {tab === "profile" && <ProfilePanel user={user} setUser={setUser} />}
         {tab === "password" && <PasswordPanel />}
       </div>
+
+      {showJoin && <JoinModal onClose={() => setShowJoin(false)} onJoined={() => { setShowJoin(false); setTab("payments"); loadAll(); }} />}
     </div>
   );
 }
 
-function OnboardingCard({ data, goToTab }) {
+function OnboardingCard({ data, goToTab, openJoin }) {
   const nextAction = {
     profile: { tab: "profile", label: "Lengkapi profil sekarang" },
-    first_payment: { tab: "payments", label: "Lihat tagihan" },
+    first_payment: { tab: null, label: "Pilih & ikut patungan", action: openJoin },
     invite: { tab: "referral", label: "Ambil kode referral" },
     reward: { tab: "referral", label: "Ajak lebih banyak teman" },
   };
@@ -151,7 +165,7 @@ function OnboardingCard({ data, goToTab }) {
 
       {next && (
         <button
-          onClick={() => goToTab(next.tab)}
+          onClick={() => next.action ? next.action() : goToTab(next.tab)}
           className="brutal-btn brutal-btn-red mt-6"
           data-testid="onboarding-next-btn"
         >
@@ -179,7 +193,7 @@ function TabBtn({ active, onClick, icon, label, testid }) {
   );
 }
 
-function SubsPanel({ subs, reload }) {
+function SubsPanel({ subs, reload, openJoin }) {
   const [warningDays, setWarningDays] = useState(7);
   const [renewingId, setRenewingId] = useState(null);
   useEffect(() => {
@@ -199,7 +213,16 @@ function SubsPanel({ subs, reload }) {
     finally { setRenewingId(null); }
   };
 
-  if (subs.length === 0) return <EmptyState msg="Belum ada langganan. Admin akan menambahkanmu ke grup layanan setelah pembayaran." />;
+  if (subs.length === 0) return (
+    <div className="brutal p-8 md:p-10 bg-[#FFD60A]/40 text-center" data-testid="subs-empty">
+      <Sparkle weight="fill" size={40} className="mx-auto" />
+      <h3 className="mt-3 font-display font-black text-2xl">Belum ada langganan.</h3>
+      <p className="mt-2 text-gray-700 max-w-md mx-auto">Mulai dengan pilih layanan (Netflix, Spotify, YouTube, dst) + durasi patungan yang kamu mau. Selesaikan pembayaran, admin akan assign kamu ke grup.</p>
+      <button onClick={openJoin} className="brutal-btn brutal-btn-red mt-6" data-testid="subs-empty-join-btn">
+        <Sparkle weight="fill" /> Pilih Layanan & Ikut Patungan
+      </button>
+    </div>
+  );
 
   const now = Date.now();
   const expiring = subs
@@ -968,6 +991,142 @@ function GroupCard({ data }) {
             Belum ada akses login dari admin untuk grup ini.
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+
+// ---- Join / Ikut Patungan Modal ---- //
+function JoinModal({ onClose, onJoined }) {
+  const [services, setServices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [pickedService, setPickedService] = useState(null);
+  const [duration, setDuration] = useState(1);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.get("/services")
+      .then((r) => { setServices(r.data.filter((s) => s.active !== false)); setLoading(false); })
+      .catch(() => { setLoading(false); });
+  }, []);
+
+  useEffect(() => {
+    if (pickedService) setDuration(pickedService.min_duration_months || 1);
+  }, [pickedService]);
+
+  const durations = [1, 3, 6, 12];
+  const price = pickedService ? (pickedService.price_regular || 0) * duration : 0;
+
+  const submit = async () => {
+    if (!pickedService) return toast.error("Pilih layanan dulu.");
+    if (duration < (pickedService.min_duration_months || 1)) {
+      return toast.error(`Durasi minimum untuk ${pickedService.name} adalah ${pickedService.min_duration_months} bulan.`);
+    }
+    setBusy(true);
+    try {
+      await api.post("/me/subscriptions/join", { service_id: pickedService.id, duration_months: duration });
+      toast.success(`Berhasil daftar ${pickedService.name}. Selesaikan pembayaran di tab Pembayaran.`);
+      onJoined && onJoined();
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={onClose} data-testid="join-modal">
+      <div className="brutal bg-white max-w-3xl w-full max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="border-b-4 border-black bg-[#FFD60A] p-5 flex items-center justify-between">
+          <div>
+            <div className="pd-tag bg-black text-white">Ikut Patungan</div>
+            <h2 className="font-display font-black text-2xl mt-2">Pilih layanan & durasi</h2>
+          </div>
+          <button onClick={onClose} className="brutal-sm p-2 bg-white" data-testid="join-modal-close"><Xicon weight="bold" size={20} /></button>
+        </div>
+
+        <div className="p-5 md:p-6 space-y-6">
+          {loading ? (
+            <div className="text-center py-8 font-mono uppercase text-sm text-gray-600">Memuat layanan...</div>
+          ) : services.length === 0 ? (
+            <div className="text-center py-8 text-gray-600">Belum ada layanan tersedia.</div>
+          ) : (
+            <>
+              <div>
+                <div className="font-display font-bold text-lg mb-3">1. Layanan</div>
+                <div className="grid sm:grid-cols-2 gap-3" data-testid="join-services">
+                  {services.map((s) => {
+                    const active = pickedService?.id === s.id;
+                    return (
+                      <button
+                        key={s.id}
+                        onClick={() => setPickedService(s)}
+                        className={`brutal-sm p-4 text-left transition-transform ${active ? "bg-[#0A0A0A] text-white translate-y-[-2px]" : "bg-white hover:bg-[#FFF8EC]"}`}
+                        data-testid={`join-service-${s.slug}`}
+                        style={active ? { boxShadow: "6px 6px 0 #FFD60A" } : {}}
+                      >
+                        <div className="flex items-center gap-3">
+                          {s.logo_url && <img src={s.logo_url} alt={s.name} className="w-10 h-10 object-cover border-2 border-black" />}
+                          <div className="flex-1">
+                            <div className="font-display font-black text-lg">{s.name}</div>
+                            <div className={`text-xs font-mono ${active ? "text-gray-300" : "text-gray-600"}`}>
+                              {rupiah(s.price_regular)}/bln · min {s.min_duration_months} bln
+                            </div>
+                          </div>
+                          {active && <CheckCircle weight="fill" size={22} />}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {pickedService && (
+                <div>
+                  <div className="font-display font-bold text-lg mb-3">2. Durasi</div>
+                  <div className="grid grid-cols-4 gap-2" data-testid="join-durations">
+                    {durations.map((m) => {
+                      const disabled = m < (pickedService.min_duration_months || 1);
+                      const active = duration === m;
+                      return (
+                        <button
+                          key={m}
+                          disabled={disabled}
+                          onClick={() => setDuration(m)}
+                          className={`brutal-sm py-3 font-display font-black text-lg ${disabled ? "bg-gray-100 text-gray-400 cursor-not-allowed" : active ? "bg-[#FF3B30] text-white" : "bg-white"}`}
+                          data-testid={`join-duration-${m}`}
+                        >
+                          {m} bln
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {pickedService && (
+                <div className="brutal-sm bg-[#FFD60A]/40 p-4" data-testid="join-summary">
+                  <div className="font-mono text-xs uppercase text-gray-700">Total (akan jadi tagihan pending)</div>
+                  <div className="font-display font-black text-3xl mt-1">{rupiah(price)}</div>
+                  <div className="text-xs text-gray-700 mt-2">
+                    Setelah konfirmasi, kamu diarahkan ke tab <b>Pembayaran</b> untuk pilih metode (QRIS manual atau Midtrans otomatis). Admin akan assign kamu ke grup setelah pembayaran diverifikasi.
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="border-t-4 border-black p-4 flex gap-3 justify-end bg-[#FFF8EC]">
+          <button onClick={onClose} className="brutal-btn brutal-btn-white" data-testid="join-cancel">Batal</button>
+          <button
+            onClick={submit}
+            disabled={!pickedService || busy}
+            className="brutal-btn brutal-btn-red disabled:opacity-50"
+            data-testid="join-submit"
+          >
+            {busy ? "Memproses..." : "Konfirmasi & Buat Tagihan"}
+          </button>
+        </div>
       </div>
     </div>
   );

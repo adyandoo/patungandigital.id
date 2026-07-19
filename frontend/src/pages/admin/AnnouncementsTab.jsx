@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { PlusCircle, PencilSimple, Trash, Megaphone, X, Warning, Info } from "@phosphor-icons/react";
+import { PlusCircle, PencilSimple, Trash, Megaphone, X, Warning, Info, SortAscending } from "@phosphor-icons/react";
 import { Modal, F } from "./shared";
 
 const SEVERITY = {
@@ -10,17 +10,45 @@ const SEVERITY = {
   critical: { bg: "bg-[#FF3B30]", fg: "text-white", label: "Critical" },
 };
 
+const SORT_OPTIONS = [
+  { key: "created_at_desc", label: "Terbaru" },
+  { key: "created_at_asc", label: "Terlama" },
+  { key: "severity", label: "Severity (critical dulu)" },
+  { key: "title_asc", label: "Judul A-Z" },
+  { key: "expires_at", label: "Terdekat expire" },
+];
+
+const SEV_ORDER = { critical: 0, warning: 1, info: 2 };
+
 export default function AnnouncementsTab() {
   const [items, setItems] = useState([]);
   const [services, setServices] = useState([]);
   const [editing, setEditing] = useState(null);
   const [showModal, setShowModal] = useState(false);
+  const [sortBy, setSortBy] = useState("created_at_desc");
 
   const load = () => {
     api.get("/admin/announcements").then((r) => setItems(r.data)).catch(() => setItems([]));
     api.get("/services").then((r) => setServices(r.data)).catch(() => {});
   };
   useEffect(() => { load(); }, []);
+
+  const sorted = useMemo(() => {
+    const arr = [...items];
+    arr.sort((a, b) => {
+      if (sortBy === "severity") return (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9);
+      if (sortBy === "title_asc") return (a.title || "").localeCompare(b.title || "", "id");
+      if (sortBy === "expires_at") {
+        const va = a.expires_at ? new Date(a.expires_at).getTime() : Infinity;
+        const vb = b.expires_at ? new Date(b.expires_at).getTime() : Infinity;
+        return va - vb;
+      }
+      const va = new Date(a.created_at || 0).getTime();
+      const vb = new Date(b.created_at || 0).getTime();
+      return sortBy === "created_at_asc" ? va - vb : vb - va;
+    });
+    return arr;
+  }, [items, sortBy]);
 
   const del = async (a) => {
     if (!window.confirm(`Hapus pengumuman "${a.title}"?`)) return;
@@ -32,15 +60,28 @@ export default function AnnouncementsTab() {
     <div data-testid="announcements-tab">
       <div className="flex items-center justify-between flex-wrap gap-3 mb-6">
         <h2 className="font-display font-bold text-2xl flex items-center gap-2"><Megaphone weight="duotone" /> Pengumuman</h2>
-        <button onClick={() => { setEditing(null); setShowModal(true); }} className="brutal-btn brutal-btn-red text-sm" data-testid="announcement-add">
-          <PlusCircle weight="bold" /> Buat pengumuman
-        </button>
+        <div className="flex gap-2 flex-wrap items-center">
+          <label className="brutal-sm bg-white px-2 py-1 flex items-center gap-2 text-xs font-mono">
+            <SortAscending size={14} />
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="bg-transparent outline-none uppercase"
+              data-testid="ann-sort"
+            >
+              {SORT_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          </label>
+          <button onClick={() => { setEditing(null); setShowModal(true); }} className="brutal-btn brutal-btn-red text-sm" data-testid="announcement-add">
+            <PlusCircle weight="bold" /> Buat pengumuman
+          </button>
+        </div>
       </div>
 
-      {items.length === 0 && <div className="brutal p-8 text-center text-gray-600">Belum ada pengumuman.</div>}
+      {sorted.length === 0 && <div className="brutal p-8 text-center text-gray-600">Belum ada pengumuman.</div>}
 
       <div className="space-y-3">
-        {items.map((a) => {
+        {sorted.map((a) => {
           const s = SEVERITY[a.severity] || SEVERITY.info;
           const expired = a.expires_at && new Date(a.expires_at).getTime() < Date.now();
           const targetServices = a.target === "service_ids"

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { PlusCircle, Trash, PencilSimple, DownloadSimple, X, ShieldStar, UploadSimple, FileText, Key } from "@phosphor-icons/react";
+import { PlusCircle, Trash, PencilSimple, DownloadSimple, X, ShieldStar, UploadSimple, FileText, Key, EnvelopeSimple, CheckCircle } from "@phosphor-icons/react";
 import { Modal, F, SearchInput } from "./shared";
 import { useSortableTable } from "@/lib/useSortableTable";
 
@@ -41,6 +41,15 @@ export default function UsersTab() {
       const { data } = await api.post(`/admin/users/${u.id}/reset-password`, { notify_email: true });
       const notified = data.email?.sent ? " (email terkirim)" : data.email?.mocked ? " (email mock — SendGrid belum aktif)" : "";
       toast.success(`Password direset ke: ${data.default_password}${notified}`);
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+  const manualVerify = async (u) => {
+    if (u.email_verified) return toast.info("Email user ini sudah terverifikasi.");
+    if (!window.confirm(`Verifikasi email ${u.email} secara manual? Ini akan mem-bypass token email dan langsung mengaktifkan akun.`)) return;
+    try {
+      const { data } = await api.post(`/admin/users/${u.id}/verify-email`);
+      toast.success(`Email ${u.email} berhasil diverifikasi manual.` + (data.welcome_email?.sent ? " Welcome email terkirim." : ""));
+      load();
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
   };
   const bulkDelete = async () => {
@@ -108,6 +117,7 @@ export default function UsersTab() {
               <th className="text-left px-4 py-3"><HeaderButton k="referral_code" label="Kode Ref" /></th>
               <th className="text-left px-4 py-3"><HeaderButton k="referral_credit" label="Kredit" /></th>
               <th className="text-left px-4 py-3"><HeaderButton k="role" label="Role" /></th>
+              <th className="text-left px-4 py-3 font-mono uppercase text-xs">Verified</th>
               <th className="text-left px-4 py-3 font-mono uppercase text-xs">Aksi</th>
             </tr>
           </thead>
@@ -126,8 +136,18 @@ export default function UsersTab() {
                 <td className="px-4 py-3 font-mono text-xs">{u.referral_code || "-"}</td>
                 <td className="px-4 py-3 font-mono text-xs">{u.referral_credit ? `Rp ${u.referral_credit.toLocaleString("id-ID")}` : "-"}</td>
                 <td className="px-4 py-3"><span className="pd-tag">{u.role}</span></td>
+                <td className="px-4 py-3">
+                  {u.email_verified ? (
+                    <span className="inline-flex items-center gap-1 font-mono text-xs px-2 py-1 bg-[#34C759] text-white border-2 border-black" data-testid={`user-verified-${u.id}`}><CheckCircle weight="fill" size={12}/> Ya</span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 font-mono text-xs px-2 py-1 bg-[#FFD60A] border-2 border-black" data-testid={`user-unverified-${u.id}`}>Belum</span>
+                  )}
+                </td>
                 <td className="px-4 py-3 flex gap-2">
                   <button data-testid={`user-edit-${u.id}`} onClick={() => { setEditing(u); setShowModal(true); }} className="brutal-sm px-2 py-1 bg-[#007AFF] text-white" title="Edit"><PencilSimple weight="bold" /></button>
+                  {!u.email_verified && u.role !== "admin" && (
+                    <button data-testid={`user-manual-verify-${u.id}`} onClick={() => manualVerify(u)} className="brutal-sm px-2 py-1 bg-[#34C759] text-white" title="Verifikasi email manual"><EnvelopeSimple weight="bold" /></button>
+                  )}
                   <button data-testid={`user-reset-pw-${u.id}`} onClick={() => resetPw(u)} className="brutal-sm px-2 py-1 bg-[#FFD60A]" title="Reset password ke default"><Key weight="bold" /></button>
                   {u.role !== "admin" && (
                     <button data-testid={`user-delete-${u.id}`} onClick={() => del(u.id)} className="brutal-sm px-2 py-1 bg-[#FF3B30] text-white" title="Hapus"><Trash weight="bold" /></button>
@@ -136,7 +156,7 @@ export default function UsersTab() {
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-600">Tidak ada hasil.</td></tr>
+              <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-600">Tidak ada hasil.</td></tr>
             )}
           </tbody>
         </table>

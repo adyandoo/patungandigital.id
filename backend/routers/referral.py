@@ -43,10 +43,11 @@ async def my_referral_stats(user: dict = Depends(get_current_user)):
 async def my_onboarding(user: dict = Depends(get_current_user)):
     fresh = await db.users.find_one({"_id": ObjectId(user["id"])})
     invited = await db.users.count_documents({"referred_by": user["id"]})
+    has_any_sub = await db.subscriptions.count_documents({"user_id": user["id"]}) > 0
     steps = [
         {"key": "signup", "label": "Buat akun", "done": True},
         {"key": "profile", "label": "Lengkapi profil (nama, WhatsApp, gender)", "done": bool(fresh.get("whatsapp") or fresh.get("gender"))},
-        {"key": "first_payment", "label": "Bayar tagihan pertama", "done": bool(fresh.get("first_paid_at"))},
+        {"key": "first_payment", "label": "Ikut patungan pertama (pilih layanan)", "done": has_any_sub or bool(fresh.get("first_paid_at"))},
         {"key": "invite", "label": "Ajak 1 teman via kode referral", "done": invited >= 1},
         {"key": "reward", "label": "Unlock kredit Rp 10.000", "done": (fresh.get("referral_credit", 0) > 0 or fresh.get("free_months_credit", 0) > 0)},
     ]

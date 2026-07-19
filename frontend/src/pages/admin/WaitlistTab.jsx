@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import api from "@/lib/api";
 import { toast } from "sonner";
 import { Trash, PaperPlaneTilt, Clock } from "@phosphor-icons/react";
+import { useSortableTable } from "@/lib/useSortableTable";
 
 export default function WaitlistTab() {
   const [entries, setEntries] = useState([]);
@@ -15,6 +16,10 @@ export default function WaitlistTab() {
     } finally { setLoading(false); }
   };
   useEffect(() => { load(); }, []);
+
+  const { sorted, HeaderButton } = useSortableTable(entries, "created_at", "desc", {
+    "created_at": (r) => new Date(r.created_at || 0).getTime(),
+  });
 
   const del = async (id) => {
     if (!window.confirm("Hapus entry ini?")) return;
@@ -46,10 +51,19 @@ export default function WaitlistTab() {
         <div className="brutal overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-black text-white">
-              <tr>{["Waktu", "Email", "Nama", "WA", "Layanan", "Pesan", "Status", "Aksi"].map((h) => <th key={h} className="text-left px-4 py-3 font-mono uppercase text-xs">{h}</th>)}</tr>
+              <tr>
+                <th className="text-left px-4 py-3"><HeaderButton k="created_at" label="Waktu" /></th>
+                <th className="text-left px-4 py-3"><HeaderButton k="email" label="Email" /></th>
+                <th className="text-left px-4 py-3"><HeaderButton k="name" label="Nama" /></th>
+                <th className="text-left px-4 py-3 font-mono uppercase text-xs">WA</th>
+                <th className="text-left px-4 py-3"><HeaderButton k="service_name" label="Layanan" /></th>
+                <th className="text-left px-4 py-3 font-mono uppercase text-xs">Pesan</th>
+                <th className="text-left px-4 py-3"><HeaderButton k="status" label="Status" /></th>
+                <th className="text-left px-4 py-3 font-mono uppercase text-xs">Aksi</th>
+              </tr>
             </thead>
             <tbody data-testid="waitlist-table">
-              {entries.map((e) => (
+              {sorted.map((e) => (
                 <tr key={e.id} className="border-t-2 border-black" data-testid={`waitlist-row-${e.id}`}>
                   <td className="px-4 py-3 font-mono text-xs whitespace-nowrap">
                     <Clock size={12} className="inline mr-1" />

@@ -724,6 +724,10 @@ async def _reminder_scheduler_loop():
         except Exception as e:
             logger.warning(f"invoice generator tick failed: {e}")
         try:
+            await _retry_pending_welcome_emails()
+        except Exception as e:
+            logger.warning(f"welcome-email retry tick failed: {e}")
+        try:
             await asyncio.wait_for(_scheduler_stop.wait(), timeout=3600)
         except asyncio.TimeoutError:
             continue
@@ -1054,6 +1058,63 @@ async def _send_welcome_email(email: str, name: str, referral_code: str) -> dict
     return result
 
 
+async def _retry_pending_welcome_emails(max_batch: int = 20) -> dict:
+    """Background retry: find verified users whose welcome email hasn't been sent yet
+    (SendGrid failed on first attempt) and retry up to 3 times. Runs every scheduler tick."""
+    # Query: verified AND welcome_email_sent != True AND retries < 3 AND email_verified_at < now - 5min
+    cutoff = now_utc() - timedelta(minutes=5)
+    q = {
+        "email_verified": True,
+        "welcome_email_sent": {"$ne": True},
+        "$or": [
+            {"welcome_email_retries": {"$exists": False}},
+            {"welcome_email_retries": {"$lt": 3}},
+        ],
+    }
+    stats = {"attempted": 0, "sent": 0, "failed": 0, "given_up": 0}
+    async for u in db.users.find(q).limit(max_batch):
+        # Skip if verified too recently — main verify handler probably still in-flight
+        verified_at = u.get("email_verified_at")
+        if isinstance(verified_at, str):
+            try:
+                verified_at = datetime.fromisoformat(verified_at)
+            except Exception:
+                verified_at = None
+        if isinstance(verified_at, datetime):
+            if verified_at.tzinfo is None:
+                verified_at = verified_at.replace(tzinfo=timezone.utc)
+            if verified_at > cutoff:
+                continue
+        stats["attempted"] += 1
+        try:
+            if not u.get("referral_code"):
+                await ensure_referral_code(str(u["_id"]))
+                u = await db.users.find_one({"_id": u["_id"]})
+            res = await _send_welcome_email(u.get("email", ""), u.get("name", ""), u.get("referral_code", ""))
+            if res.get("sent") or res.get("mocked"):
+                await db.users.update_one(
+                    {"_id": u["_id"]},
+                    {"$set": {"welcome_email_sent": True, "welcome_email_sent_at": now_utc().isoformat()}},
+                )
+                stats["sent"] += 1
+            else:
+                retries = int(u.get("welcome_email_retries", 0) or 0) + 1
+                update = {"welcome_email_retries": retries, "welcome_email_last_retry_at": now_utc().isoformat()}
+                if retries >= 3:
+                    update["welcome_email_given_up"] = True
+                    stats["given_up"] += 1
+                await db.users.update_one({"_id": u["_id"]}, {"$set": update})
+                stats["failed"] += 1
+        except Exception as e:
+            logger.warning(f"welcome retry failed for {u.get('email')}: {e}")
+            retries = int(u.get("welcome_email_retries", 0) or 0) + 1
+            await db.users.update_one({"_id": u["_id"]}, {"$set": {"welcome_email_retries": retries, "welcome_email_last_retry_at": now_utc().isoformat()}})
+            stats["failed"] += 1
+    if stats["attempted"]:
+        logger.info(f"welcome email retry: {stats}")
+    return stats
+
+
 class ResendVerificationInput(BaseModel):
     email: EmailStr
 
@@ -1105,20 +1166,24 @@ async def register(input: RegisterInput, response: Response):
 @api.post("/auth/verify-email")
 async def verify_email(input: VerifyEmailInput, response: Response):
     th = hashlib.sha256(input.token.encode()).hexdigest()
-    rec = await db.email_verifications.find_one({"token_hash": th, "used": False})
+    # Idempotent lookup: accept token even if already used, so long as it belongs to a real user
+    # and hasn't expired. This handles React StrictMode double-invocation and email-client
+    # link prefetchers (Gmail, corporate scanners) that hit the endpoint multiple times.
+    rec = await db.email_verifications.find_one({"token_hash": th})
     if not rec:
-        raise HTTPException(400, "Token tidak valid atau sudah dipakai.")
+        raise HTTPException(400, "Token tidak valid.")
     exp = rec.get("expires_at")
     if isinstance(exp, datetime) and exp.tzinfo is None:
         exp = exp.replace(tzinfo=timezone.utc)
     if not exp or exp < now_utc():
         raise HTTPException(400, "Token kadaluarsa. Minta link verifikasi baru.")
-    # Mark user verified
+    # Mark user verified (idempotent — no-op if already verified)
     await db.users.update_one(
         {"_id": ObjectId(rec["user_id"])},
         {"$set": {"email_verified": True, "email_verified_at": now_utc().isoformat()}},
     )
-    await db.email_verifications.update_one({"_id": rec["_id"]}, {"$set": {"used": True, "used_at": now_utc()}})
+    if not rec.get("used"):
+        await db.email_verifications.update_one({"_id": rec["_id"]}, {"$set": {"used": True, "used_at": now_utc()}})
     user = await db.users.find_one({"_id": ObjectId(rec["user_id"])})
     # Ensure referral code exists so we can include it in the welcome email
     if not user.get("referral_code"):
@@ -1308,6 +1373,75 @@ async def set_profile_picture(input: ProfilePicInput, user: dict = Depends(get_c
     return user_out(u)
 
 
+class JoinInput(BaseModel):
+    service_id: str
+    duration_months: int = Field(default=1, ge=1, le=24)
+
+
+@api.post("/me/subscriptions/join")
+async def user_join_subscription(input: JoinInput, user: dict = Depends(get_current_user)):
+    """A user selects a service + duration and initiates enrollment.
+    Creates a pending subscription (no group yet) and a pending payment.
+    Admin will assign a group after payment is confirmed."""
+    if not ObjectId.is_valid(input.service_id):
+        raise HTTPException(400, "Invalid service id")
+    svc = await db.services.find_one({"_id": ObjectId(input.service_id)})
+    if not svc or not svc.get("active", True):
+        raise HTTPException(404, "Layanan tidak tersedia")
+    min_dur = int(svc.get("min_duration_months", 1) or 1)
+    if input.duration_months < min_dur:
+        raise HTTPException(400, f"Durasi minimum untuk layanan ini {min_dur} bulan.")
+    # Block duplicate ACTIVE/PENDING sub for the same service
+    existing = await db.subscriptions.find_one({
+        "user_id": user["id"],
+        "service_id": input.service_id,
+        "status": {"$in": ["active", "pending"]},
+    })
+    if existing:
+        raise HTTPException(400, "Kamu sudah punya langganan aktif/pending untuk layanan ini. Lihat di tab Langganan / Pembayaran.")
+    price_per_month = int(svc.get("price_regular", 0) or 0)
+    total = price_per_month * int(input.duration_months)
+    now = now_utc()
+    sub_doc = {
+        "user_id": user["id"],
+        "service_id": input.service_id,
+        "plan_id": None,
+        "group_id": None,
+        "role": "regular",
+        "start_date": None,  # activated by admin after payment
+        "end_date": None,
+        "price": price_per_month,
+        "status": "pending",
+        "duration_months": int(input.duration_months),
+        "created_at": now.isoformat(),
+        "self_join": True,
+    }
+    sub_res = await db.subscriptions.insert_one(sub_doc)
+    sub_id = str(sub_res.inserted_id)
+    # Create payment
+    cfg = await db.settings.find_one({"key": "invoice_config"}) or {}
+    due_days = int(cfg.get("due_days", 7) or 7)
+    period_label = now.astimezone(WIB).strftime("%b %Y")
+    pay_doc = {
+        "subscription_id": sub_id,
+        "amount": total,
+        "base_amount": total,
+        "period_label": period_label,
+        "due_date": (now + timedelta(days=due_days)).isoformat(),
+        "status": "pending",
+        "created_at": now.isoformat(),
+        "receipt": None,
+        "payment_method": None,
+        "duration_months": int(input.duration_months),
+        "self_join": True,
+    }
+    pay_res = await db.payments.insert_one(pay_doc)
+    pay_doc["id"] = str(pay_res.inserted_id)
+    pay_doc.pop("_id", None)
+    await log_admin_action(None, "user_join", f"subscription:{sub_id}", {"user_id": user["id"], "service": svc.get("name"), "duration": input.duration_months})
+    return {"ok": True, "subscription_id": sub_id, "payment": pay_doc, "amount": total, "service_name": svc.get("name")}
+
+
 @api.post("/me/subscriptions/{sub_id}/renew")
 async def user_renew_subscription(sub_id: str, input: RenewInput, user: dict = Depends(get_current_user)):
     """Create a fresh pending payment for the user's own subscription (renewal).
@@ -1417,6 +1551,47 @@ async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
     await db.subscriptions.delete_many({"user_id": user_id})
     await log_admin_action(admin, "delete_user", f"user:{user_id}", {"email": (victim or {}).get("email")})
     return {"ok": True}
+
+
+@api.post("/admin/users/{user_id}/verify-email")
+async def admin_manual_verify_email(user_id: str, admin: dict = Depends(require_admin)):
+    """Admin manually marks a user's email as verified (bypasses token flow).
+    Useful when the email verification link is broken/expired or SendGrid delivery failed.
+    Also invalidates any outstanding tokens and (idempotently) sends welcome email."""
+    if not ObjectId.is_valid(user_id):
+        raise HTTPException(400, "Invalid user id")
+    victim = await db.users.find_one({"_id": ObjectId(user_id)})
+    if not victim:
+        raise HTTPException(404, "User tidak ditemukan")
+    if victim.get("email_verified"):
+        return {"ok": True, "already_verified": True, "user": user_out(victim)}
+    await db.users.update_one(
+        {"_id": victim["_id"]},
+        {"$set": {"email_verified": True, "email_verified_at": now_utc().isoformat(), "email_verified_by_admin": admin["id"]}},
+    )
+    # Invalidate any pending verification tokens for this user
+    await db.email_verifications.update_many(
+        {"user_id": user_id, "used": False},
+        {"$set": {"used": True, "used_at": now_utc(), "used_by": "admin"}},
+    )
+    # Ensure referral + welcome email (idempotent — same as verify_email path)
+    victim = await db.users.find_one({"_id": victim["_id"]})
+    if not victim.get("referral_code"):
+        await ensure_referral_code(str(victim["_id"]))
+        victim = await db.users.find_one({"_id": victim["_id"]})
+    welcome_result = {"skipped": True}
+    if not victim.get("welcome_email_sent"):
+        try:
+            welcome_result = await _send_welcome_email(victim.get("email", ""), victim.get("name", ""), victim.get("referral_code", ""))
+            await db.users.update_one(
+                {"_id": victim["_id"]},
+                {"$set": {"welcome_email_sent": True, "welcome_email_sent_at": now_utc().isoformat()}},
+            )
+        except Exception as e:
+            logger.warning(f"Welcome email send failed (admin manual verify) for {victim.get('email')}: {e}")
+            welcome_result = {"sent": False, "error": str(e)}
+    await log_admin_action(admin, "manual_email_verify", f"user:{user_id}", {"email": victim.get("email")})
+    return {"ok": True, "user": user_out(victim), "welcome_email": welcome_result}
 
 
 # ---------------- Admin: services ---------------- #

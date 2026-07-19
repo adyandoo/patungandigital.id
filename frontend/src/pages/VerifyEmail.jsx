@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams, useNavigate, Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
@@ -11,10 +11,15 @@ export default function VerifyEmail() {
   const { setUser, setToken } = useAuth();
   const [status, setStatus] = useState("loading"); // loading | success | error
   const [message, setMessage] = useState("");
+  const attempted = useRef(false);
 
   useEffect(() => {
+    // Guard: StrictMode dev + email prefetchers (Gmail, corp scanners) can invoke this twice.
+    // Backend is now idempotent, but we still guard here for cleaner UX.
+    if (attempted.current) return;
     const token = params.get("token");
     if (!token) { setStatus("error"); setMessage("Token tidak ditemukan di URL."); return; }
+    attempted.current = true;
     api.post("/auth/verify-email", { token })
       .then(({ data }) => {
         setStatus("success");

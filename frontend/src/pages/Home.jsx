@@ -4,10 +4,12 @@ import api, { rupiah } from "@/lib/api";
 import { UsersThree, Sparkle, ShieldCheck, CurrencyCircleDollar, ArrowRight, Gift, Trophy, Medal, Star, Quotes } from "@phosphor-icons/react";
 import Avatar from "@/components/Avatar";
 import SEO from "@/components/SEO";
+import { useAuth } from "@/context/AuthContext";
 
 const HERO_IMG = "https://images.unsplash.com/photo-1714978444538-9097293e5b20?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwxfHxncm91cCUyMG9mJTIwZnJpZW5kcyUyMHdhdGNoaW5nJTIwdHYlMjBlbmpveWluZ3xlbnwwfHx8fDE3ODQzODA5MDF8MA&ixlib=rb-4.1.0&q=85";
 
 export default function Home() {
+  const { user } = useAuth();
   const [services, setServices] = useState([]);
   const [leaderboard, setLeaderboard] = useState(null);
   const [availability, setAvailability] = useState({});
@@ -135,7 +137,11 @@ export default function Home() {
                     Antri di waitlist <Sparkle weight="fill" />
                   </button>
                 ) : (
-                  <Link to="/register" className="brutal-btn brutal-btn-blue mt-6 justify-center" data-testid={`service-cta-${s.slug}`}>
+                  <Link
+                    to={user ? "/dashboard?action=join" : `/register?service=${s.slug}`}
+                    className="brutal-btn brutal-btn-blue mt-6 justify-center"
+                    data-testid={`service-cta-${s.slug}`}
+                  >
                     Ikut patungan <Sparkle weight="fill" />
                   </Link>
                 )}
