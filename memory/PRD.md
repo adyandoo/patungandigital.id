@@ -72,10 +72,21 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - **Fixed** `gen_referral_code` to always yield exactly 8 chars (increased URL-safe entropy pool).
 - Testing: 63/64 backend tests PASS (9/9 iter5 new). Frontend flows verified.
 
+## Iteration 6 (2026-02-19) — SendGrid, Router split, Cleanup, Onboarding
+- **SendGrid key added** to `backend/.env`. Real email attempts on reminder send; falls back to log on unverified sender.
+- **server.py split** (P1): extracted to `/app/backend/routers/analytics.py`, `referral.py`, `webhooks.py`. server.py 1364→1211 lines. Routers import from `server` at module load (circular-safe pattern since server includes them at end).
+- **Cleanup endpoint** (P2): `POST /api/admin/cleanup-test-users?prefix=X` deletes users matching regex `^X` (case-insensitive), plus their subs/payments/referral_rewards; sets `referred_by=null` on remaining users pointing to deleted ones. Never touches admins. Overview tab has UI button.
+- **Onboarding checklist** (P3): `GET /api/me/onboarding` returns 5-step progress {signup, profile-WA, first_payment, invite, reward} with percent. OnboardingCard renders above tabs with progress bar + step chips + smart "next action" button that switches to correct tab.
+- **Bug fixes** (post-test): (a) `apply_referral_rewards_if_first_paid` now unconditionally sets `first_paid_at` on any first-paid payment (was gated on `referred_by` — broke organic-user onboarding). (b) Frontend OnboardingCard restored after truncation regression.
+- Testing: **78/78 tests PASS** (11 iter6 + 3 iter6-retest new). Zero regressions.
+- Cleanup: 111 test users removed post-test.
+
 ## Backlog / next tasks
-- **P0** (external): User setup — Midtrans Dashboard → Settings → Payment → Notification URL: `https://group-stream-admin.preview.emergentagent.com/api/webhooks/midtrans`.
-- **P1**: Real SendGrid + Twilio keys to enable live email/WhatsApp.
-- **P2**: Split `server.py` (1364 lines) into `routers/*.py` modules (referral, admin, midtrans, analytics).
-- **P2**: DB cleanup / filter test-prefixed users from public leaderboard before production launch.
-- **P2**: Remove deprecated Xendit endpoints once Midtrans is live-verified.
+- **P0** (external): Configure Midtrans webhook URL at Midtrans Dashboard → Settings → Payment → Notification URL: `https://group-stream-admin.preview.emergentagent.com/api/webhooks/midtrans`.
+- **P0** (external): Verify SendGrid sender email (`noreply@patungandigital.id`) via SendGrid Sender Authentication → currently emails likely fail 403 on unverified sender.
+- **P1**: Real Twilio credentials to enable live WhatsApp.
+- **P1**: Race-safe `first_paid_at` update (use conditional filter `{"first_paid_at": None}` to prevent double-credit on parallel paid-transitions).
+- **P2**: Further server.py split — extract admin CRUD, payments, auth into dedicated routers.
+- **P2**: Escape regex prefix in `cleanup-test-users` (currently `^{prefix}` — metacharacters not escaped).
 - **P2**: Move base64 receipts to object storage.
+- **P2**: Filter test-prefixed users from public leaderboard for prod (already cleaned but recurring test runs will repopulate).
