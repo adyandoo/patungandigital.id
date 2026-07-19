@@ -239,6 +239,12 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
   - Users tab (from iter15) still has full sort coverage.
 - **Testing**: 12/12 iter16 backend tests PASS + 100% frontend flows. 1 minor enumeration leak in `resend-verification` was identified by testing agent and fixed same iteration.
 
+## Iteration 17 (2026-02-19) — Welcome Email post-verification
+- **New helper** `_send_welcome_email(email, name, referral_code)` in `server.py` — sends branded HTML email (Bahasa Indonesia) via existing SendGrid pipeline.
+- **Content**: Hero header (patungandigital.id branding), personalized greeting, 5-step "Cara Mulai Berlangganan" onboarding checklist, CTA button to Dashboard, referral code card (yellow highlight, monospace big code), WhatsApp share button (pre-filled message with referral link) + Copy Link button.
+- **Trigger**: `POST /api/auth/verify-email` — after user is marked verified, endpoint ensures referral_code exists (auto-generates via `ensure_referral_code`), then sends welcome email (try/except so SendGrid failures don't block verify flow), then sets idempotency flags `welcome_email_sent=True` + `welcome_email_sent_at` (ISO string).
+- **Testing**: 12/12 iter17 backend tests PASS. Manual curl end-to-end verified (test user welcome_test_1784446615@example.com received verified=True + welcome_email_sent=True + referral_code auto-generated).
+
 ## Backlog / next tasks
 - **P1 (still open)**: Extend sort headers to Waitlist + Testimonials + Announcements (card grids need a "Sort by" dropdown, not column headers).
 - **P2 (still open)**: Extract `deps.py` + `models.py` + `routers/auth.py` — server.py is now ~2015 lines and continues to grow with verification helpers.
