@@ -8,10 +8,17 @@ const HERO_IMG = "https://images.unsplash.com/photo-1714978444538-9097293e5b20?c
 export default function Home() {
   const [services, setServices] = useState([]);
   const [leaderboard, setLeaderboard] = useState(null);
+  const [availability, setAvailability] = useState({});
+  const [waitlistFor, setWaitlistFor] = useState(null);
 
   useEffect(() => {
     api.get("/services").then((r) => setServices(r.data)).catch(() => {});
     api.get("/leaderboard").then((r) => setLeaderboard(r.data)).catch(() => {});
+    api.get("/public/availability").then((r) => {
+      const map = {};
+      r.data.forEach((a) => { map[a.service_id] = a; });
+      setAvailability(map);
+    }).catch(() => {});
   }, []);
 
   return (
@@ -77,14 +84,37 @@ export default function Home() {
           <p className="text-lg max-w-md text-gray-800">Harga per orang per bulan. Durasi minimum berlaku per layanan.</p>
         </div>
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8" data-testid="services-grid">
-          {services.map((s) => (
+          {services.map((s) => {
+            const avail = availability[s.id] || {};
+            const filled = avail.filled_slots || 0;
+            const total = avail.total_slots || 0;
+            const available = avail.available_slots || 0;
+            const hasCapacity = total > 0;
+            const isFull = hasCapacity && available === 0;
+            return (
             <div key={s.id} className="brutal brutal-hover overflow-hidden flex flex-col" data-testid={`service-card-${s.slug}`}>
-              <div className="h-40 border-b-2 border-black" style={{ background: s.color }}>
+              <div className="h-40 border-b-2 border-black relative" style={{ background: s.color }}>
                 {s.logo_url && <img src={s.logo_url} alt={s.name} className="w-full h-full object-cover mix-blend-multiply opacity-80" />}
+                {hasCapacity && (
+                  <div className={`absolute top-3 right-3 pd-tag ${isFull ? "bg-[#FF3B30] text-white" : "bg-[#34C759] text-white"}`} data-testid={`slot-badge-${s.slug}`}>
+                    {isFull ? "penuh" : `${available} tersedia`}
+                  </div>
+                )}
               </div>
               <div className="p-6 flex-1 flex flex-col">
                 <h3 className="font-display font-bold text-2xl">{s.name}</h3>
                 <p className="text-sm text-gray-700 mt-2 flex-1">{s.description}</p>
+                {hasCapacity && (
+                  <div className="mt-4" data-testid={`slot-bar-${s.slug}`}>
+                    <div className="flex items-center justify-between text-xs font-mono uppercase text-gray-700 mb-1">
+                      <span>{filled}/{total} slot terisi</span>
+                      <span>{Math.round((filled / total) * 100)}%</span>
+                    </div>
+                    <div className="h-2 border-2 border-black bg-white overflow-hidden">
+                      <div className="h-full bg-[#34C759]" style={{ width: `${(filled / total) * 100}%` }}></div>
+                    </div>
+                  </div>
+                )}
                 <div className="mt-6 flex items-end justify-between">
                   <div>
                     <div className="font-mono text-xs uppercase text-gray-600">mulai dari</div>
@@ -92,12 +122,18 @@ export default function Home() {
                   </div>
                   <span className="pd-tag">min {s.min_duration_months} bln</span>
                 </div>
-                <Link to="/register" className="brutal-btn brutal-btn-blue mt-6 justify-center" data-testid={`service-cta-${s.slug}`}>
-                  Ikut patungan <Sparkle weight="fill" />
-                </Link>
+                {isFull ? (
+                  <button onClick={() => setWaitlistFor(s)} className="brutal-btn brutal-btn-yellow mt-6 justify-center" data-testid={`waitlist-cta-${s.slug}`}>
+                    Antri di waitlist <Sparkle weight="fill" />
+                  </button>
+                ) : (
+                  <Link to="/register" className="brutal-btn brutal-btn-blue mt-6 justify-center" data-testid={`service-cta-${s.slug}`}>
+                    Ikut patungan <Sparkle weight="fill" />
+                  </Link>
+                )}
               </div>
             </div>
-          ))}
+          );})}
           {services.length === 0 && (
             <div className="col-span-full text-center py-12 text-gray-600">Belum ada layanan.</div>
           )}
@@ -187,6 +223,43 @@ export default function Home() {
         <div className="font-display font-black">patungandigital.id © {new Date().getFullYear()}</div>
         <div className="text-sm text-gray-700">Hemat itu pintar. Patungan itu keren.</div>
       </footer>
+
+      {waitlistFor && <WaitlistModal service={waitlistFor} onClose={() => setWaitlistFor(null)} />}
+    </div>
+  );
+}
+
+function WaitlistModal({ service, onClose }) {
+  const [form, setForm] = useState({ email: "", name: "", whatsapp: "", message: "" });
+  const [sent, setSent] = useState(false);
+  const submit = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post("/waitlist", { ...form, service_id: service.id });
+      setSent(true);
+    } catch {}
+  };
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="brutal-lg bg-white max-w-md w-full" onClick={(e) => e.stopPropagation()}>
+        <div className="border-b-2 border-black bg-[#FFD60A] p-4 font-display font-black text-xl">Waitlist — {service.name}</div>
+        {sent ? (
+          <div className="p-8 text-center" data-testid="waitlist-thanks">
+            <div className="font-display font-black text-2xl">Kamu masuk waitlist! 🎉</div>
+            <p className="mt-2 text-gray-700">Admin akan hubungi begitu ada slot kosong. Cek email & WhatsApp ya.</p>
+            <button onClick={onClose} className="brutal-btn brutal-btn-red mt-6">Tutup</button>
+          </div>
+        ) : (
+          <form onSubmit={submit} className="p-6 space-y-3" data-testid="waitlist-form">
+            <p className="text-sm text-gray-700">Semua slot {service.name} penuh. Isi form ini — admin bakal kabari kalau ada spot kosong.</p>
+            <input required type="email" placeholder="Email" className="brutal-input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} data-testid="waitlist-email" />
+            <input placeholder="Nama (opsional)" className="brutal-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            <input placeholder="WhatsApp (opsional)" className="brutal-input" value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} />
+            <textarea rows="2" placeholder="Pesan (opsional)" className="brutal-input" value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} />
+            <button type="submit" className="brutal-btn brutal-btn-red w-full justify-center" data-testid="waitlist-submit">Masuk waitlist</button>
+          </form>
+        )}
+      </div>
     </div>
   );
 }

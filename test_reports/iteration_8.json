@@ -1,0 +1,48 @@
+{
+  "summary": "Iter7 full-stack verification. All 4 features work: (P2) race-safe first_paid_at — 2 parallel PATCH status=paid yield exactly ONE referral_reward + exactly +10000 credit to referrer & referred (verified via ThreadPoolExecutor and admin logs count). (P3) Groups CRUD + shared credentials — admin create/list/patch/delete works; PUT/GET/DELETE /admin/groups/{id}/credential works; list includes credential WITHOUT password, GET credential includes password. /me/groups returns full credential (with password) to group members; empty array when user in no group; credential=null when group has none. (P4) PATCH /admin/subscriptions/{id} accepts group_id — verified. Public /api/public/availability (no auth) returns per-service slot metrics with all required fields. POST /waitlist (no auth) creates entry; GET/DELETE /admin/waitlist admin-gated (401 for non-admin). Frontend: admin GroupsTab renders with [admin-tab-groups]/[admin-add-group]/[gm-name/gm-service/gm-save]/[group-credential-*]/[cred-email/cred-password/cred-save]/[group-assign-*] — all present and functional. User dashboard [tab-groups] shows [groups-empty] when no groups and [my-groups] populated with (kamu) marker + [group-credential-*] + [toggle-pw-*] (reveals password) + [copy-pw-*] when assigned. Home service cards show [slot-badge-*]/[slot-bar-*] when service has ≥1 group; [waitlist-cta-*] replaces register CTA when full; WaitlistModal ([waitlist-form]/[waitlist-email]/[waitlist-submit]) submits successfully and shows [waitlist-thanks].",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/public/availability", "issue": "filled_slots counts ALL active subs for the service, including those with group_id=null. This can make filled_slots > total_slots and slot-bar percentage exceed 100% (seen in UI: netflix showed '40/5 SLOT TERISI 800%'). Recommend filtering: subs with group_id != null, or match subs to sum of group host_slots/regular_slots."},
+      {"endpoint": "PATCH /api/admin/groups/{id}", "issue": "Uses full GroupInput (service_id, name, host_slots, regular_slots required) — behaves as replace not partial patch. Non-breaking but inconsistent with PATCH semantics."},
+      {"endpoint": "POST /api/waitlist", "issue": "EmailStr rejects reserved TLDs (e.g., .local, .test). Not a bug but users testing with common dummy domains hit 422."},
+      {"endpoint": "PUT /api/admin/groups/{id}/credential", "issue": "CredentialInput.email uses `str` not EmailStr (unlike other endpoints) — allows arbitrary strings. Consider validation."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Home.jsx slot-badge", "issue": "Bar width may exceed 100% (800% observed) when filled_slots > total_slots due to backend counting all active subs. Cap Math.min(filled/total, 1) client-side as defensive measure.", "selector": "[data-testid^=slot-bar-]", "priority": "MEDIUM"},
+      {"component": "Home.jsx slot-badge visibility", "issue": "pd-tag with bg-[#34C759] + text-white renders with poor contrast on some browsers (badge text was near-invisible in test screenshot). Verify pd-tag utility class does not override bg/text.", "selector": "[data-testid^=slot-badge-]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Home service cards", "issues": ["When service has no groups (total_slots==0), no slot badge/bar renders at all — user cannot tell if this is unknown vs available. Consider showing neutral 'segera' badge."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter7.py",
+    "/app/test_reports/pytest/iter7.xml",
+    "/app/test_reports/pytest/iter7_all.xml"
+  ],
+  "action_items": [
+    "Fix availability filled_slots calculation to match total_slots semantics (count only subs with group_id set, or track filled per group)",
+    "Cap slot-bar width client-side to prevent >100% overflow",
+    "Consider making PATCH /admin/groups/{id} accept partial body",
+    "Optional: use EmailStr in CredentialInput"
+  ],
+  "critical_code_review_comments": [
+    "Race-safety implementation via atomic filter {first_paid_at: None} + modified_count check is correct. Verified with concurrent PATCHes.",
+    "GET /admin/groups strips password via projection {password: 0} — correct. GET /me/groups intentionally returns password to group members — correct per spec.",
+    "server.py now 1408 lines — consider splitting groups/waitlist into a separate router alongside existing analytics/referral/webhooks routers.",
+    "Availability endpoint: for each service iterates services→groups→subs (N+M queries). Fine for current scale but consider aggregation pipeline as data grows.",
+    "GroupsTab.jsx (236 lines) — assign modal loads all subscriptions via GET /admin/subscriptions but filters client-side; on larger datasets add server-side filter by service_id."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter7.py (new — 9 tests, all pass)"],
+  "success_rate": {"backend": "100% (9/9 iter7 tests). Full regression 85/87 — 2 flakes (test_iter3 scheduler_dedupe and test_iter5 tier2 — both ConnectTimeout, not iter7 related).", "frontend": "100% — all requested data-testids present and functional end-to-end (admin CRUD, user groups panel, home slot widget, waitlist modal)"},
+  "test_credentials": "admin@patungandigital.id / admin123",
+  "seed_data_creation": "Test users prefix 'iter7_' created during pytest + one UI user iter7ui_grp_*. All cleaned up via POST /api/admin/cleanup-test-users?prefix=iter7 (18 users, 10 subs deleted). All Iter7 UI groups deleted.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter7 fully verified. Backend suite now 87 tests (78 prev + 9 iter7). Run: `REACT_APP_BACKEND_URL=<url> pytest backend/tests/ -o addopts='' --tb=short`. Iter7 module: `pytest backend/tests/test_iter7.py`. Only remaining polish: (1) availability filled_slots off-by-N when legacy subs have no group_id — see backend_issues.minor. (2) slot-bar % cap. Twilio still MOCKED as noted.",
+  "rca of the issue": "N/A — no iter7 regressions. Two non-blocking observations noted in backend_issues.minor and frontend_issues.ui_bugs."
+}

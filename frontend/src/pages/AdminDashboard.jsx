@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
-import { Users, PaperPlaneTilt, Receipt, Storefront, Ticket, GearSix, ClockCounterClockwise } from "@phosphor-icons/react";
+import { Users, PaperPlaneTilt, Receipt, Storefront, Ticket, GearSix, ClockCounterClockwise, UsersThree } from "@phosphor-icons/react";
 import OverviewTab from "./admin/OverviewTab";
 import UsersTab from "./admin/UsersTab";
 import ServicesTab from "./admin/ServicesTab";
 import SubscriptionsTab from "./admin/SubscriptionsTab";
+import GroupsTab from "./admin/GroupsTab";
 import PaymentsTab from "./admin/PaymentsTab";
 import ReminderTab from "./admin/ReminderTab";
 import ActivityTab from "./admin/ActivityTab";
@@ -14,6 +15,7 @@ const TABS = [
   { id: "users", label: "Users", icon: <Users weight="duotone" />, Comp: UsersTab },
   { id: "services", label: "Services", icon: <Storefront weight="duotone" />, Comp: ServicesTab },
   { id: "subscriptions", label: "Subscriptions", icon: <Ticket weight="duotone" />, Comp: SubscriptionsTab },
+  { id: "groups", label: "Groups", icon: <UsersThree weight="duotone" />, Comp: GroupsTab },
   { id: "payments", label: "Payments", icon: <Receipt weight="duotone" />, Comp: PaymentsTab },
   { id: "reminder", label: "Reminder", icon: <PaperPlaneTilt weight="duotone" />, Comp: ReminderTab },
   { id: "activity", label: "Activity", icon: <ClockCounterClockwise weight="duotone" />, Comp: ActivityTab },

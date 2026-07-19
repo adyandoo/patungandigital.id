@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import api, { rupiah, formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
-import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise, Gift, Copy, ShareNetwork, Trophy, Medal, Circle, CheckFat, Sparkle } from "@phosphor-icons/react";
+import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise, Gift, Copy, ShareNetwork, Trophy, Medal, Circle, CheckFat, Sparkle, UsersThree, Eye, EyeSlash, Key } from "@phosphor-icons/react";
 
 export default function UserDashboard() {
   const { user, setUser } = useAuth();
@@ -51,6 +51,7 @@ export default function UserDashboard() {
       {/* Tabs */}
       <div className="mt-8 flex gap-2 border-b-2 border-black overflow-x-auto">
         <TabBtn active={tab === "subs"} onClick={() => setTab("subs")} icon={<Ticket weight="duotone" />} label="Langganan" testid="tab-subs" />
+        <TabBtn active={tab === "groups"} onClick={() => setTab("groups")} icon={<UsersThree weight="duotone" />} label="Grup & Akses" testid="tab-groups" />
         <TabBtn active={tab === "payments"} onClick={() => setTab("payments")} icon={<Receipt weight="duotone" />} label="Pembayaran" testid="tab-payments" />
         <TabBtn active={tab === "referral"} onClick={() => setTab("referral")} icon={<Gift weight="duotone" />} label="Referral" testid="tab-referral" />
         <TabBtn active={tab === "profile"} onClick={() => setTab("profile")} icon={<User weight="duotone" />} label="Profil" testid="tab-profile" />
@@ -59,6 +60,7 @@ export default function UserDashboard() {
 
       <div className="mt-8">
         {tab === "subs" && <SubsPanel subs={subs} />}
+        {tab === "groups" && <GroupsPanel />}
         {tab === "payments" && <PaymentsPanel payments={payments} reload={loadAll} />}
         {tab === "referral" && <ReferralPanel />}
         {tab === "profile" && <ProfilePanel user={user} setUser={setUser} />}
@@ -484,4 +486,85 @@ function toBase64(file) {
     r.onerror = rej;
     r.readAsDataURL(file);
   });
+}
+
+
+function GroupsPanel() {
+  const [groups, setGroups] = useState(null);
+  useEffect(() => { api.get("/me/groups").then((r) => setGroups(r.data)).catch(() => setGroups([])); }, []);
+  if (groups === null) return <div className="brutal p-8">Memuat...</div>;
+  if (groups.length === 0) return <div className="brutal p-10 text-center text-gray-700" data-testid="groups-empty">Belum ada grup. Setelah admin menempatkanmu ke grup layanan, info akan muncul di sini.</div>;
+  return (
+    <div className="grid md:grid-cols-2 gap-6" data-testid="my-groups">
+      {groups.map((g, i) => <GroupCard key={g.group.id + i} data={g} />)}
+    </div>
+  );
+}
+
+function GroupCard({ data }) {
+  const [showPw, setShowPw] = useState(false);
+  const { group, service, role, members, credential } = data;
+  const copy = (t, label = "Disalin!") => navigator.clipboard.writeText(t).then(() => toast.success(label));
+  return (
+    <div className="brutal overflow-hidden" data-testid={`group-item-${group.id}`}>
+      <div className="p-4 border-b-2 border-black" style={{ background: service?.color || "#0A0A0A", color: "#fff" }}>
+        <div className="text-xs font-mono uppercase opacity-80">{service?.name}</div>
+        <div className="font-display font-black text-2xl">{group.name}</div>
+      </div>
+      <div className="p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <UsersThree weight="duotone" size={20} />
+          <span className="pd-tag">{role}</span>
+          <span className="text-sm text-gray-600 font-mono">{members.length}/{group.host_slots + group.regular_slots} anggota</span>
+        </div>
+        <div>
+          <div className="font-mono text-xs uppercase text-gray-600 mb-2">Anggota grup</div>
+          <ul className="space-y-1 text-sm">
+            {members.map((m, idx) => (
+              <li key={idx} className={`flex items-center justify-between border-b border-black/10 pb-1 ${m.is_me ? "font-bold" : ""}`}>
+                <span>{m.name} {m.is_me && <span className="text-[10px] font-mono text-gray-600">(kamu)</span>}</span>
+                <span className={`pd-tag text-[10px] ${m.role === "host" ? "bg-[#FFD60A]" : "bg-white"}`}>{m.role}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        {credential ? (
+          <div className="brutal-sm bg-[#FFD60A]/40 p-4" data-testid={`group-credential-${group.id}`}>
+            <div className="flex items-center gap-2">
+              <Key weight="fill" size={18} />
+              <div className="font-display font-bold">Akses login</div>
+            </div>
+            <div className="mt-3 space-y-2">
+              <div>
+                <div className="font-mono text-[10px] uppercase text-gray-600">Email</div>
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-sm break-all">{credential.email}</span>
+                  <button onClick={() => copy(credential.email, "Email disalin!")} className="brutal-sm p-1 bg-white" data-testid={`copy-email-${group.id}`}><Copy weight="bold" size={14} /></button>
+                </div>
+              </div>
+              <div>
+                <div className="font-mono text-[10px] uppercase text-gray-600">Password</div>
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-sm break-all">{showPw ? credential.password : "••••••••••"}</span>
+                  <div className="flex gap-1">
+                    <button onClick={() => setShowPw((s) => !s)} className="brutal-sm p-1 bg-white" data-testid={`toggle-pw-${group.id}`}>
+                      {showPw ? <EyeSlash weight="bold" size={14} /> : <Eye weight="bold" size={14} />}
+                    </button>
+                    <button onClick={() => copy(credential.password, "Password disalin!")} className="brutal-sm p-1 bg-white" data-testid={`copy-pw-${group.id}`}><Copy weight="bold" size={14} /></button>
+                  </div>
+                </div>
+              </div>
+              {credential.notes && (
+                <div className="text-xs text-gray-800 mt-2 border-t border-black/20 pt-2">{credential.notes}</div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="brutal-sm bg-white p-3 text-sm text-gray-600">
+            Belum ada akses login dari admin untuk grup ini.
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
