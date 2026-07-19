@@ -1342,12 +1342,12 @@ async def services_availability():
         groups = await db.groups.find({"service_id": sid, "active": True}).to_list(None)
         total_host = sum(g["host_slots"] for g in groups)
         total_reg = sum(g["regular_slots"] for g in groups)
-        # Filled = active subs with role in that service
-        subs = await db.subscriptions.find({"service_id": sid, "status": "active"}).to_list(None)
+        # Filled = only subs that have been assigned to a group (real slot allocation)
+        subs = await db.subscriptions.find({"service_id": sid, "status": "active", "group_id": {"$ne": None, "$exists": True}}).to_list(None)
         filled_host = sum(1 for x in subs if x.get("role") == "host")
         filled_reg = sum(1 for x in subs if x.get("role") == "regular")
         total_slots = total_host + total_reg
-        filled_slots = filled_host + filled_reg
+        filled_slots = min(filled_host + filled_reg, total_slots)
         available = max(0, total_slots - filled_slots)
         out.append({
             "service_id": sid,

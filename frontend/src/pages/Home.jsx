@@ -107,11 +107,11 @@ export default function Home() {
                 {hasCapacity && (
                   <div className="mt-4" data-testid={`slot-bar-${s.slug}`}>
                     <div className="flex items-center justify-between text-xs font-mono uppercase text-gray-700 mb-1">
-                      <span>{filled}/{total} slot terisi</span>
-                      <span>{Math.round((filled / total) * 100)}%</span>
+                      <span>{Math.min(filled, total)}/{total} slot terisi</span>
+                      <span>{Math.min(100, Math.round((filled / total) * 100))}%</span>
                     </div>
                     <div className="h-2 border-2 border-black bg-white overflow-hidden">
-                      <div className="h-full bg-[#34C759]" style={{ width: `${(filled / total) * 100}%` }}></div>
+                      <div className="h-full bg-[#34C759]" style={{ width: `${Math.min(100, Math.round((filled / total) * 100))}%` }}></div>
                     </div>
                   </div>
                 )}

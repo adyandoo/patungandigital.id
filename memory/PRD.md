@@ -81,12 +81,27 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - Testing: **78/78 tests PASS** (11 iter6 + 3 iter6-retest new). Zero regressions.
 - Cleanup: 111 test users removed post-test.
 
+## Iteration 7 (2026-02-19) — Race-safe first_paid_at + Groups & Login Access + Waitlist
+- **Race-safe first_paid_at (P2)**: `apply_referral_rewards_if_first_paid` uses atomic `update_one({"first_paid_at": None}, ...)` — `modified_count` decides the single "winner"; verified via `asyncio.gather` — 2 parallel PATCH status=paid produce exactly ONE referral_reward row + ONE +Rp10k credit increment on each side.
+- **Groups + shared Login Access (P3)**:
+  - New collections `groups` (per-service capacity bucket), `group_credentials` (email/password shared to group members).
+  - Extended `SubscriptionInput` with optional `group_id`.
+  - Admin endpoints: `GET/POST/PATCH/DELETE /api/admin/groups`; `PUT/GET/DELETE /api/admin/groups/{id}/credential`. List includes members with role + filled counts + credential (password masked).
+  - User endpoint: `GET /api/me/groups` returns `[{group, service, role, members[{name,role,is_me}], credential{email,password,notes}}]` — password INCLUDED for members (that's the whole point of shared access).
+  - Admin GroupsTab UI: card per group with slot bars, "Assign user" modal (patches subscription.group_id), "Set/Edit login" modal for credentials.
+  - User Grup & Akses tab UI: header colored per service, member list with "(kamu)" marker, credential card with `Eye`/`EyeSlash` toggle + copy buttons for email & password.
+- **Public slot availability + Waitlist (P4)**:
+  - `GET /api/public/availability` (no auth) — per-service totals from groups + filled from group-assigned active subs, capped at total.
+  - Home service cards: badge (`{X} tersedia` / `penuh`), slot bar (100% capped), "Antri di waitlist" replaces Register CTA when full.
+  - `POST /api/waitlist` (no auth) creates entry; `GET/DELETE /api/admin/waitlist` admin-gated.
+- Testing: **95/97 tests PASS** (9/9 iter7 new + 2 pre-existing scheduler flakes unrelated). All 4 features verified end-to-end.
+- Cleanup: All iter7 test users + test services removed.
+
 ## Backlog / next tasks
-- **P0** (external): Configure Midtrans webhook URL at Midtrans Dashboard → Settings → Payment → Notification URL: `https://group-stream-admin.preview.emergentagent.com/api/webhooks/midtrans`.
-- **P0** (external): Verify SendGrid sender email (`noreply@patungandigital.id`) via SendGrid Sender Authentication → currently emails likely fail 403 on unverified sender.
-- **P1**: Real Twilio credentials to enable live WhatsApp.
-- **P1**: Race-safe `first_paid_at` update (use conditional filter `{"first_paid_at": None}` to prevent double-credit on parallel paid-transitions).
-- **P2**: Further server.py split — extract admin CRUD, payments, auth into dedicated routers.
-- **P2**: Escape regex prefix in `cleanup-test-users` (currently `^{prefix}` — metacharacters not escaped).
+- **P1**: Twilio credentials to enable WhatsApp reminders (email now active via SendGrid).
+- **P1**: Admin Waitlist tab UI (endpoints exist, but no dashboard listing yet).
+- **P2**: Extract Groups + Waitlist into `routers/groups.py` (server.py now 1408 lines).
+- **P2**: Optimize `/public/availability` with aggregation pipeline (currently N queries).
+- **P2**: Show "segera" neutral badge on home when service has no groups yet (currently no badge = ambiguous).
+- **P2**: Consider EmailStr validation on `CredentialInput.email`.
 - **P2**: Move base64 receipts to object storage.
-- **P2**: Filter test-prefixed users from public leaderboard for prod (already cleaned but recurring test runs will repopulate).
