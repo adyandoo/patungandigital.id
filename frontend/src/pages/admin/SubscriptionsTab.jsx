@@ -116,7 +116,7 @@ function SubModal({ users, services, onClose, onSaved }) {
         </F>
         <div className="grid grid-cols-2 gap-3">
           <F label="Role">
-            <select className="brutal-input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+            <select className="brutal-input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} data-testid="submod-role">
               <option value="regular">Regular</option><option value="host">Host</option>
             </select>
           </F>

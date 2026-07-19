@@ -97,11 +97,18 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - Testing: **95/97 tests PASS** (9/9 iter7 new + 2 pre-existing scheduler flakes unrelated). All 4 features verified end-to-end.
 - Cleanup: All iter7 test users + test services removed.
 
+## Iteration 8 (2026-02-19) — Waitlist UI, Router split, Group status, Auto-suggest, H-7 expiry
+- **Waitlist admin UI (P1)**: new tab [Waitlist] with entries table, mark-contacted (PATCH `/admin/waitlist/{id}` status='contacted'), delete. New endpoint `PATCH /api/admin/waitlist/{id}` accepts `{status, notes}`.
+- **Groups extraction (P2)**: 12 endpoints (`/admin/groups`, `/admin/groups/{id}/credential`, `/me/groups`, `/public/availability`, `/waitlist`, `/admin/waitlist`, `/admin/groups/suggest`) moved to `routers/groups.py`. server.py 1408 → 1248 lines. Zero regressions.
+- **Group status + expiry (P3)**: `GroupInput` gains `status` (active/paused/expired) + `expires_at`; GroupsTab modal shows both fields; card renders status badge + expiry chip.
+- **Auto-suggest groups (P3)**: New `GET /api/admin/groups/suggest?service_id=X&role=Y` returns groups with open slots for the role. SubModal populates `[data-testid=submod-group]` dropdown with `"GroupName — X/Y regular, Z/W host — N slot regular tersedia"` format; shows red hint when no groups available.
+- **H-7 expiry reminder (P3)**: scheduler tick scans groups with `expires_at within 7d + status=active + expiry_reminder_sent!=True`, sets flag idempotently and logs `group_expiry_reminder` activity entry.
+- **E2E verified**: 1 Netflix group + 2 users (host+regular) assigned → set shared credential → both users see identical email/password via /me/groups. `is_me` flag correctly identifies self.
+- Testing: **97/97 tests PASS** (10/10 iter8 new + full regression). One backend hardening applied by testing agent: `admin_list_subs` now ObjectId.is_valid guarded.
+
 ## Backlog / next tasks
-- **P1**: Twilio credentials to enable WhatsApp reminders (email now active via SendGrid).
-- **P1**: Admin Waitlist tab UI (endpoints exist, but no dashboard listing yet).
-- **P2**: Extract Groups + Waitlist into `routers/groups.py` (server.py now 1408 lines).
-- **P2**: Optimize `/public/availability` with aggregation pipeline (currently N queries).
-- **P2**: Show "segera" neutral badge on home when service has no groups yet (currently no badge = ambiguous).
-- **P2**: Consider EmailStr validation on `CredentialInput.email`.
+- **P1**: Twilio credentials for live WhatsApp reminders.
+- **P2**: Harden other admin_list_* endpoints with ObjectId.is_valid guards for data integrity.
+- **P2**: Migrate legacy orphan subscription (user_id='0') via one-off cleanup.
+- **P2**: `PATCH /admin/subscriptions/{id}` accepts full body only — consider partial-update PATCH semantics.
 - **P2**: Move base64 receipts to object storage.
