@@ -543,6 +543,7 @@ class InvoiceConfigInput(BaseModel):
     day_of_month: int = Field(default=1, ge=1, le=28)
     due_days: int = Field(default=7, ge=1, le=60)
     enabled: bool = True
+    expiry_warning_days: int = Field(default=7, ge=1, le=30)
 
 
 class GeneralConfigInput(BaseModel):
@@ -559,8 +560,31 @@ class CreateAdminInput(BaseModel):
 class ReminderConfigInput(BaseModel):
     days_before_due: int = 3
     enable_email: bool = True
-    enable_whatsapp: bool = True
     reminder_message: Optional[str] = "Halo {name}, tagihan {service} untuk {period} akan jatuh tempo pada {due_date}. Jumlah: Rp {amount}."
+
+
+class TestimonialInput(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str = Field(min_length=10, max_length=500)
+
+
+class TestimonialUpdateInput(BaseModel):
+    rating: Optional[int] = Field(default=None, ge=1, le=5)
+    comment: Optional[str] = Field(default=None, min_length=10, max_length=500)
+
+
+class TestimonialAdminAction(BaseModel):
+    status: Optional[str] = None  # 'approved' | 'rejected' | 'pending'
+    rating: Optional[int] = Field(default=None, ge=1, le=5)
+    comment: Optional[str] = Field(default=None, min_length=10, max_length=500)
+
+
+class ProfilePicInput(BaseModel):
+    profile_picture_base64: Optional[str] = None  # data URL or null to clear
+
+
+class RenewInput(BaseModel):
+    duration_months: Optional[int] = Field(default=None, ge=1, le=24)
 
 
 # ---------------- App ---------------- #
@@ -767,9 +791,18 @@ async def lifespan(app: FastAPI):
             "key": "reminder_config",
             "days_before_due": 3,
             "enable_email": True,
-            "enable_whatsapp": True,
             "reminder_message": "Halo {name}, tagihan {service} untuk {period} akan jatuh tempo pada {due_date}. Jumlah: Rp {amount}.",
         })
+    # Ensure invoice_config has expiry_warning_days field
+    await db.settings.update_one(
+        {"key": "invoice_config", "expiry_warning_days": {"$exists": False}},
+        {"$set": {"expiry_warning_days": 7}},
+    )
+    # Migration: drop enable_whatsapp field if present
+    await db.settings.update_one(
+        {"key": "reminder_config", "enable_whatsapp": {"$exists": True}},
+        {"$unset": {"enable_whatsapp": ""}},
+    )
     # Seed default services
     if await db.services.count_documents({}) == 0:
         seed_services = [
@@ -946,6 +979,67 @@ async def update_profile(input: UpdateProfileInput, user: dict = Depends(get_cur
         await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": updates})
     updated = await db.users.find_one({"_id": ObjectId(user["id"])})
     return user_out(updated)
+
+
+@api.put("/auth/profile-picture")
+async def set_profile_picture(input: ProfilePicInput, user: dict = Depends(get_current_user)):
+    """Set or clear own profile picture. Client-side pre-resizes to <500KB."""
+    b64 = input.profile_picture_base64
+    if b64 is None:
+        await db.users.update_one({"_id": ObjectId(user["id"])}, {"$unset": {"profile_picture_base64": ""}})
+        u = await db.users.find_one({"_id": ObjectId(user["id"])})
+        return user_out(u)
+    # Basic size guard (base64 ~1.33x binary size)
+    if len(b64) > 700_000:
+        raise HTTPException(413, "Foto terlalu besar. Maks ~500KB setelah resize.")
+    if not (b64.startswith("data:image/") or len(b64) < 700_000):
+        raise HTTPException(400, "Format foto tidak valid.")
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": {"profile_picture_base64": b64}})
+    u = await db.users.find_one({"_id": ObjectId(user["id"])})
+    return user_out(u)
+
+
+@api.post("/me/subscriptions/{sub_id}/renew")
+async def user_renew_subscription(sub_id: str, input: RenewInput, user: dict = Depends(get_current_user)):
+    """Create a fresh pending payment for the user's own subscription (renewal).
+    Uses sub.duration_months by default, or override from input."""
+    if not ObjectId.is_valid(sub_id):
+        raise HTTPException(400, "Invalid subscription id")
+    sub = await db.subscriptions.find_one({"_id": ObjectId(sub_id)})
+    if not sub or sub.get("user_id") != user["id"]:
+        raise HTTPException(404, "Langganan tidak ditemukan")
+    duration = int(input.duration_months or sub.get("duration_months", 1) or 1)
+    price = int(sub.get("price", 0)) * duration
+    # Determine period label starting from next month after current end_date (or now)
+    now = now_utc()
+    end = sub.get("end_date")
+    if isinstance(end, str):
+        try: end = datetime.fromisoformat(end)
+        except Exception: end = None
+    if isinstance(end, datetime) and end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start_from = end if (end and end > now) else now
+    period_label = start_from.astimezone(WIB).strftime("%b %Y")
+    cfg = await db.settings.find_one({"key": "invoice_config"}) or {}
+    due_days = int(cfg.get("due_days", 7) or 7)
+    doc = {
+        "subscription_id": sub_id,
+        "amount": price,
+        "base_amount": price,
+        "period_label": period_label,
+        "due_date": now + timedelta(days=due_days),
+        "status": "pending",
+        "created_at": now.isoformat(),
+        "receipt": None,
+        "payment_method": None,
+        "duration_months": duration,
+        "renew_by_user": True,
+    }
+    r = await db.payments.insert_one(doc)
+    doc["id"] = str(r.inserted_id); doc.pop("_id", None)
+    if isinstance(doc.get("due_date"), datetime):
+        doc["due_date"] = doc["due_date"].isoformat()
+    return doc
 
 
 # ---------------- Public: services ---------------- #
@@ -1388,23 +1482,10 @@ async def _send_reminder_for_payment(payment_id: str, actor: Optional[dict] = No
     else:
         mocked = True
         logger.info(f"[MOCK EMAIL] to={(user or {}).get('email')} msg={msg}")
-    if cfg.get("enable_whatsapp", True) and os.environ.get("TWILIO_ACCOUNT_SID") and (user or {}).get("whatsapp"):
-        try:
-            from twilio.rest import Client as TwilioClient
-            def _send_wa():
-                tc = TwilioClient(os.environ["TWILIO_ACCOUNT_SID"], os.environ["TWILIO_AUTH_TOKEN"])
-                tc.messages.create(from_=os.environ.get("TWILIO_WHATSAPP_FROM"), to=f"whatsapp:{user['whatsapp']}", body=msg)
-            await asyncio.get_event_loop().run_in_executor(None, _send_wa)
-            wa_sent = True
-        except Exception as e:
-            logger.warning(f"Twilio error: {e}")
-    else:
-        mocked = True
-        logger.info(f"[MOCK WHATSAPP] to={(user or {}).get('whatsapp')} msg={msg}")
 
     await db.payments.update_one({"_id": ObjectId(payment_id)}, {"$set": {"last_reminder_at": now_utc()}})
-    await log_admin_action(actor, "send_reminder", f"payment:{payment_id}", {"email_sent": email_sent, "whatsapp_sent": wa_sent, "mocked": mocked, "user": (user or {}).get("email")})
-    return {"email_sent": email_sent, "whatsapp_sent": wa_sent, "mocked": mocked, "message": msg, "payment_id": payment_id}
+    await log_admin_action(actor, "send_reminder", f"payment:{payment_id}", {"email_sent": email_sent, "mocked": mocked, "user": (user or {}).get("email")})
+    return {"email_sent": email_sent, "mocked": mocked, "message": msg, "payment_id": payment_id}
 
 
 # ---------------- Admin: stats ---------------- #
@@ -1671,8 +1752,10 @@ app.include_router(groups_router, prefix="/api")
 # Late imports to avoid circular deps (these routers import from server.py)
 from routers.settings import router as settings_router
 from routers.admin_users import router as admin_users_router
+from routers.testimonials import router as testimonials_router
 app.include_router(settings_router, prefix="/api")
 app.include_router(admin_users_router, prefix="/api")
+app.include_router(testimonials_router, prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,

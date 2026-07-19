@@ -38,7 +38,6 @@ export default function ReminderTab() {
         <div className="mt-6 space-y-4">
           <F label="Kirim reminder H- (hari)"><input type="number" className="brutal-input" value={cfg.days_before_due} onChange={(e) => setCfg({ ...cfg, days_before_due: e.target.value })} /></F>
           <label className="flex items-center gap-2"><input type="checkbox" checked={cfg.enable_email} onChange={(e) => setCfg({ ...cfg, enable_email: e.target.checked })} /> Aktifkan Email (SendGrid)</label>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={cfg.enable_whatsapp} onChange={(e) => setCfg({ ...cfg, enable_whatsapp: e.target.checked })} /> Aktifkan WhatsApp (Twilio)</label>
           <F label="Template pesan (gunakan {name}, {service}, {period}, {due_date}, {amount})">
             <textarea rows="5" className="brutal-input" value={cfg.reminder_message} onChange={(e) => setCfg({ ...cfg, reminder_message: e.target.value })} />
           </F>

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import api, { rupiah } from "@/lib/api";
-import { UsersThree, Sparkle, ShieldCheck, CurrencyCircleDollar, ArrowRight, Gift, Trophy, Medal } from "@phosphor-icons/react";
+import { UsersThree, Sparkle, ShieldCheck, CurrencyCircleDollar, ArrowRight, Gift, Trophy, Medal, Star, Quotes } from "@phosphor-icons/react";
+import Avatar from "@/components/Avatar";
 
 const HERO_IMG = "https://images.unsplash.com/photo-1714978444538-9097293e5b20?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwxfHxncm91cCUyMG9mJTIwZnJpZW5kcyUyMHdhdGNoaW5nJTIwdHYlMjBlbmpveWluZ3xlbnwwfHx8fDE3ODQzODA5MDF8MA&ixlib=rb-4.1.0&q=85";
 
@@ -10,6 +11,7 @@ export default function Home() {
   const [leaderboard, setLeaderboard] = useState(null);
   const [availability, setAvailability] = useState({});
   const [waitlistFor, setWaitlistFor] = useState(null);
+  const [testimonials, setTestimonials] = useState({ items: [], stats: { avg: 0, count: 0 } });
 
   useEffect(() => {
     api.get("/services").then((r) => setServices(r.data)).catch(() => {});
@@ -19,6 +21,7 @@ export default function Home() {
       r.data.forEach((a) => { map[a.service_id] = a; });
       setAvailability(map);
     }).catch(() => {});
+    api.get("/testimonials?limit=12").then((r) => setTestimonials(r.data)).catch(() => {});
   }, []);
 
   return (
@@ -199,6 +202,42 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      {/* Testimonials */}
+      {testimonials.items.length > 0 && (
+        <section className="border-t-2 border-black bg-white px-6 md:px-12 py-20" data-testid="testimonials-section">
+          <div className="flex items-end justify-between gap-6 flex-wrap">
+            <div>
+              <span className="pd-tag bg-[#34C759] text-white">Testimoni</span>
+              <h2 className="font-display font-black text-4xl md:text-6xl mt-4 max-w-3xl">Kata mereka yang<br />sudah patungan.</h2>
+            </div>
+            <div className="brutal p-4 min-w-[180px] text-center">
+              <div className="flex justify-center gap-0.5">
+                {[1,2,3,4,5].map((n) => <Star key={n} weight={n <= Math.round(testimonials.stats.avg) ? "fill" : "regular"} size={20} className={n <= Math.round(testimonials.stats.avg) ? "text-[#FFD60A]" : "text-gray-400"} />)}
+              </div>
+              <div className="font-display font-black text-3xl mt-1" data-testid="testimonials-avg-rating">{testimonials.stats.avg.toFixed(1)}</div>
+              <div className="text-xs font-mono uppercase text-gray-600">{testimonials.stats.count} ulasan</div>
+            </div>
+          </div>
+          <div className="mt-12 marquee-wrap">
+            <div className="flex gap-6 marquee-track">
+              {[...testimonials.items, ...testimonials.items].map((t, i) => (
+                <div key={`${t.id}-${i}`} className="brutal p-6 w-80 flex-none bg-[#FFF9E6]" data-testid={`testimonial-${t.id}`}>
+                  <Quotes weight="fill" size={28} className="text-[#FF3B30]" />
+                  <div className="flex gap-0.5 mt-3">
+                    {[1,2,3,4,5].map((n) => <Star key={n} weight={n <= t.rating ? "fill" : "regular"} size={14} className={n <= t.rating ? "text-[#FFD60A]" : "text-gray-400"} />)}
+                  </div>
+                  <p className="mt-3 text-sm leading-relaxed line-clamp-6">{t.comment}</p>
+                  <div className="mt-4 flex items-center gap-3">
+                    <Avatar src={t.user?.profile_picture_base64} name={t.user?.name} size={40} />
+                    <div className="font-display font-bold">{t.user?.name || "Anonim"}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* How it works */}
       <section className="border-t-2 border-black bg-[#0A0A0A] text-white px-6 md:px-12 py-20">

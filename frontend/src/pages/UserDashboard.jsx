@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import api, { rupiah, formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
-import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise, Gift, Copy, ShareNetwork, Trophy, Medal, Circle, CheckFat, Sparkle, UsersThree, Eye, EyeSlash, Key, QrCode, CurrencyCircleDollar, ArrowSquareOut, X as Xicon } from "@phosphor-icons/react";
+import { Receipt, User, Lock, Ticket, UploadSimple, CheckCircle, ClockCounterClockwise, Gift, Copy, ShareNetwork, Trophy, Medal, Circle, CheckFat, Sparkle, UsersThree, Eye, EyeSlash, Key, QrCode, CurrencyCircleDollar, ArrowSquareOut, X as Xicon, Star, ChatCircleDots, ArrowClockwise, Warning, Camera, Trash } from "@phosphor-icons/react";
+import Avatar from "@/components/Avatar";
 
 export default function UserDashboard() {
   const { user, setUser } = useAuth();
@@ -29,10 +30,13 @@ export default function UserDashboard() {
   return (
     <div className="px-6 md:px-12 py-10">
       <div className="flex items-end justify-between flex-wrap gap-4">
-        <div>
-          <span className="pd-tag">Dashboard</span>
-          <h1 className="font-display font-black text-4xl md:text-5xl mt-3">Halo, {user?.name}.</h1>
-          <p className="text-gray-700 mt-1">Semua urusan patunganmu ada di sini.</p>
+        <div className="flex items-center gap-4">
+          <Avatar src={user?.profile_picture_base64} name={user?.name} size={72} testId="header-avatar" />
+          <div>
+            <span className="pd-tag">Dashboard</span>
+            <h1 className="font-display font-black text-4xl md:text-5xl mt-3">Halo, {user?.name}.</h1>
+            <p className="text-gray-700 mt-1">Semua urusan patunganmu ada di sini.</p>
+          </div>
         </div>
         <div className="flex gap-2 flex-wrap">
           <StatChip label="Langganan aktif" value={subs.filter((s) => s.status === "active").length} />
@@ -54,15 +58,17 @@ export default function UserDashboard() {
         <TabBtn active={tab === "groups"} onClick={() => setTab("groups")} icon={<UsersThree weight="duotone" />} label="Grup & Akses" testid="tab-groups" />
         <TabBtn active={tab === "payments"} onClick={() => setTab("payments")} icon={<Receipt weight="duotone" />} label="Pembayaran" testid="tab-payments" />
         <TabBtn active={tab === "referral"} onClick={() => setTab("referral")} icon={<Gift weight="duotone" />} label="Referral" testid="tab-referral" />
+        <TabBtn active={tab === "testimoni"} onClick={() => setTab("testimoni")} icon={<ChatCircleDots weight="duotone" />} label="Testimoni" testid="tab-testimoni" />
         <TabBtn active={tab === "profile"} onClick={() => setTab("profile")} icon={<User weight="duotone" />} label="Profil" testid="tab-profile" />
         <TabBtn active={tab === "password"} onClick={() => setTab("password")} icon={<Lock weight="duotone" />} label="Password" testid="tab-password" />
       </div>
 
       <div className="mt-8">
-        {tab === "subs" && <SubsPanel subs={subs} />}
+        {tab === "subs" && <SubsPanel subs={subs} reload={loadAll} />}
         {tab === "groups" && <GroupsPanel />}
         {tab === "payments" && <PaymentsPanel payments={payments} reload={loadAll} />}
         {tab === "referral" && <ReferralPanel />}
+        {tab === "testimoni" && <TestimoniPanel />}
         {tab === "profile" && <ProfilePanel user={user} setUser={setUser} />}
         {tab === "password" && <PasswordPanel />}
       </div>
@@ -143,26 +149,81 @@ function TabBtn({ active, onClick, icon, label, testid }) {
   );
 }
 
-function SubsPanel({ subs }) {
+function SubsPanel({ subs, reload }) {
+  const [warningDays, setWarningDays] = useState(7);
+  const [renewingId, setRenewingId] = useState(null);
+  useEffect(() => {
+    api.get("/payment-config")
+      .then((r) => setWarningDays(r.data.expiry_warning_days || 7))
+      .catch(() => {});
+  }, []);
+
+  const renew = async (subId) => {
+    if (!window.confirm("Buat tagihan perpanjangan sekarang?")) return;
+    setRenewingId(subId);
+    try {
+      await api.post(`/me/subscriptions/${subId}/renew`, {});
+      toast.success("Tagihan perpanjangan dibuat. Cek tab Pembayaran untuk pilih metode.");
+      reload && reload();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+    finally { setRenewingId(null); }
+  };
+
   if (subs.length === 0) return <EmptyState msg="Belum ada langganan. Admin akan menambahkanmu ke grup layanan setelah pembayaran." />;
+
+  const now = Date.now();
+  const expiring = subs
+    .map((s) => {
+      if (!s.end_date) return null;
+      const t = new Date(s.end_date).getTime();
+      const daysLeft = Math.floor((t - now) / 86400000);
+      if (daysLeft < 0) return { ...s, daysLeft, expired: true };
+      if (daysLeft <= warningDays) return { ...s, daysLeft, expired: false };
+      return null;
+    })
+    .filter(Boolean);
+
   return (
-    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6" data-testid="subs-grid">
-      {subs.map((s) => (
-        <div key={s.id} className="brutal p-6" data-testid={`sub-card-${s.id}`}>
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <div className="font-display font-black text-2xl">{s.service?.name}</div>
-              <div className="pd-tag mt-2">{s.role === "host" ? "Host" : "Regular"}</div>
+    <div className="space-y-6" data-testid="subs-panel">
+      {expiring.map((s) => (
+        <div key={"warn-" + s.id} className={`brutal p-5 flex flex-wrap items-center gap-4 ${s.expired ? "bg-[#FF3B30] text-white" : "bg-[#FFD60A]"}`} data-testid={`expiry-banner-${s.id}`}>
+          <Warning weight="fill" size={32} />
+          <div className="flex-1 min-w-[220px]">
+            <div className="font-display font-black text-xl">
+              {s.expired
+                ? `Langganan ${s.service?.name} sudah expired ${Math.abs(s.daysLeft)} hari lalu.`
+                : `Langganan ${s.service?.name} berakhir ${s.daysLeft === 0 ? "hari ini" : `${s.daysLeft} hari lagi`}.`}
             </div>
-            <span className={`px-2 py-1 font-mono text-xs border-2 border-black ${s.status === "active" ? "bg-[#34C759] text-white" : "bg-gray-200"}`}>{s.status}</span>
+            <div className="text-sm mt-1 opacity-80">Perpanjang sekarang biar layanannya tidak putus.</div>
           </div>
-          <div className="mt-4 space-y-1 text-sm">
-            <div><span className="font-mono text-gray-600">Mulai:</span> {formatDate(s.start_date)}</div>
-            {s.end_date && <div><span className="font-mono text-gray-600">Sampai:</span> {formatDate(s.end_date)}</div>}
-            <div className="mt-2 font-display font-black text-xl">{rupiah(s.price)}<span className="text-sm font-normal">/periode</span></div>
-          </div>
+          <button
+            disabled={renewingId === s.id}
+            onClick={() => renew(s.id)}
+            className={`brutal-btn ${s.expired ? "brutal-btn-white text-black" : "brutal-btn-red"}`}
+            data-testid={`renew-btn-${s.id}`}
+          >
+            <ArrowClockwise weight="bold" /> {renewingId === s.id ? "Membuat tagihan..." : "Perpanjang sekarang"}
+          </button>
         </div>
       ))}
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6" data-testid="subs-grid">
+        {subs.map((s) => (
+          <div key={s.id} className="brutal p-6" data-testid={`sub-card-${s.id}`}>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="font-display font-black text-2xl">{s.service?.name}</div>
+                <div className="pd-tag mt-2">{s.role === "host" ? "Host" : "Regular"}</div>
+              </div>
+              <span className={`px-2 py-1 font-mono text-xs border-2 border-black ${s.status === "active" ? "bg-[#34C759] text-white" : "bg-gray-200"}`}>{s.status}</span>
+            </div>
+            <div className="mt-4 space-y-1 text-sm">
+              <div><span className="font-mono text-gray-600">Mulai:</span> {formatDate(s.start_date)}</div>
+              {s.end_date && <div><span className="font-mono text-gray-600">Sampai:</span> {formatDate(s.end_date)}</div>}
+              <div className="mt-2 font-display font-black text-xl">{rupiah(s.price)}<span className="text-sm font-normal">/periode</span></div>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -375,34 +436,199 @@ function ProfilePanel({ user, setUser }) {
   };
 
   return (
-    <form onSubmit={save} className="brutal p-6 md:p-10 max-w-2xl" data-testid="profile-form">
-      <h3 className="font-display font-bold text-2xl">Informasi profil</h3>
-      <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Field label="Nama"><input data-testid="prof-name" className="brutal-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
-        <Field label="Username"><input data-testid="prof-username" className="brutal-input" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
-        <Field label="Email"><input className="brutal-input bg-gray-100" value={user?.email} disabled /></Field>
-        <Field label="WhatsApp"><input data-testid="prof-whatsapp" className="brutal-input" value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} /></Field>
-        <Field label="Gender">
-          <select data-testid="prof-gender" className="brutal-input" value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })}>
-            <option value="">-</option><option value="L">Laki-laki</option><option value="P">Perempuan</option>
-          </select>
-        </Field>
+    <div className="space-y-6 max-w-2xl">
+      <ProfilePicturePicker user={user} setUser={setUser} />
+      <form onSubmit={save} className="brutal p-6 md:p-10" data-testid="profile-form">
+        <h3 className="font-display font-bold text-2xl">Informasi profil</h3>
+        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Field label="Nama"><input data-testid="prof-name" className="brutal-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
+          <Field label="Username"><input data-testid="prof-username" className="brutal-input" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
+          <Field label="Email"><input className="brutal-input bg-gray-100" value={user?.email} disabled /></Field>
+          <Field label="WhatsApp"><input data-testid="prof-whatsapp" className="brutal-input" value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} /></Field>
+          <Field label="Gender">
+            <select data-testid="prof-gender" className="brutal-input" value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })}>
+              <option value="">-</option><option value="L">Laki-laki</option><option value="P">Perempuan</option>
+            </select>
+          </Field>
+        </div>
+        {user?.extra && Object.keys(user.extra).length > 0 && (
+          <div className="mt-6">
+            <div className="font-mono text-xs uppercase text-gray-600 mb-2">Info tambahan (dari admin)</div>
+            <div className="brutal-sm bg-[#FFD60A]/40 p-4 space-y-1">
+              {Object.entries(user.extra).map(([k, v]) => (
+                <div key={k} className="text-sm"><span className="font-mono">{k}:</span> {String(v)}</div>
+              ))}
+            </div>
+          </div>
+        )}
+        <button type="submit" className="brutal-btn brutal-btn-red mt-8" data-testid="prof-save">
+          <CheckCircle weight="bold" /> Simpan
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function ProfilePicturePicker({ user, setUser }) {
+  const [busy, setBusy] = useState(false);
+  const pick = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const b64 = await resizeImageTo512(file);
+      const { data } = await api.put("/auth/profile-picture", { profile_picture_base64: b64 });
+      setUser(data);
+      toast.success("Foto profil diperbarui.");
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail) || "Gagal upload"); }
+    finally { setBusy(false); }
+  };
+  const remove = async () => {
+    if (!window.confirm("Hapus foto profil?")) return;
+    try {
+      const { data } = await api.put("/auth/profile-picture", { profile_picture_base64: null });
+      setUser(data);
+      toast.success("Foto profil dihapus.");
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+  return (
+    <div className="brutal p-6 md:p-8 flex items-center gap-6 flex-wrap" data-testid="profile-picture-card">
+      <Avatar src={user?.profile_picture_base64} name={user?.name} size={96} testId="profile-avatar-preview" />
+      <div className="flex-1 min-w-[200px]">
+        <h3 className="font-display font-bold text-xl">Foto profil</h3>
+        <p className="text-sm text-gray-700 mt-1">Format JPG/PNG, otomatis diperkecil ke 512×512. Kalau kosong, kami tampilkan avatar warna dari inisial namamu.</p>
       </div>
-      {user?.extra && Object.keys(user.extra).length > 0 && (
-        <div className="mt-6">
-          <div className="font-mono text-xs uppercase text-gray-600 mb-2">Info tambahan (dari admin)</div>
-          <div className="brutal-sm bg-[#FFD60A]/40 p-4 space-y-1">
-            {Object.entries(user.extra).map(([k, v]) => (
-              <div key={k} className="text-sm"><span className="font-mono">{k}:</span> {String(v)}</div>
+      <div className="flex gap-2">
+        <label className="brutal-btn brutal-btn-blue cursor-pointer" data-testid="profile-pic-upload">
+          <Camera weight="bold" /> {busy ? "Mengunggah..." : (user?.profile_picture_base64 ? "Ganti" : "Upload")}
+          <input type="file" accept="image/*" className="hidden" onChange={(e) => pick(e.target.files[0])} />
+        </label>
+        {user?.profile_picture_base64 && (
+          <button onClick={remove} className="brutal-btn brutal-btn-white" data-testid="profile-pic-remove"><Trash weight="bold" /></button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+async function resizeImageTo512(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const size = 512;
+      const scale = Math.min(size / img.width, size / img.height, 1);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL("image/jpeg", 0.85));
+    };
+    img.onerror = reject;
+    const r = new FileReader();
+    r.onload = () => { img.src = r.result; };
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+function TestimoniPanel() {
+  const [items, setItems] = useState([]);
+  const [rating, setRating] = useState(5);
+  const [comment, setComment] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = () => api.get("/me/testimonials").then((r) => setItems(r.data)).catch(() => setItems([]));
+  useEffect(() => { load(); }, []);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if ((comment || "").trim().length < 10) return toast.error("Komentar minimal 10 karakter.");
+    setBusy(true);
+    try {
+      if (editingId) {
+        await api.patch(`/me/testimonials/${editingId}`, { rating, comment });
+        toast.success("Testimoni diperbarui. Menunggu review admin.");
+      } else {
+        await api.post("/me/testimonials", { rating, comment });
+        toast.success("Testimoni dikirim! Menunggu review admin.");
+      }
+      setEditingId(null); setRating(5); setComment(""); load();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+
+  const startEdit = (t) => {
+    if (t.status === "approved") return toast.info("Testimoni sudah disetujui admin dan tidak bisa diedit. Hapus dulu untuk buat baru.");
+    setEditingId(t.id); setRating(t.rating); setComment(t.comment);
+  };
+  const del = async (t) => {
+    if (!window.confirm("Hapus testimoni ini?")) return;
+    try { await api.delete(`/me/testimonials/${t.id}`); toast.success("Testimoni dihapus."); load(); }
+    catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+
+  return (
+    <div className="grid md:grid-cols-2 gap-8" data-testid="testimoni-panel">
+      <form onSubmit={submit} className="brutal p-6 md:p-8 space-y-4" data-testid="testimoni-form">
+        <h3 className="font-display font-bold text-2xl">
+          {editingId ? "Edit testimoni" : "Tulis testimoni"}
+        </h3>
+        <p className="text-sm text-gray-700">Cerita positif kamu akan membantu calon user lain untuk percaya patungandigital.id 💛</p>
+        <Field label="Rating">
+          <div className="flex gap-1" data-testid="rating-stars">
+            {[1,2,3,4,5].map((n) => (
+              <button type="button" key={n} onClick={() => setRating(n)} data-testid={`rating-${n}`}>
+                <Star weight={n <= rating ? "fill" : "regular"} size={32} className={n <= rating ? "text-[#FFD60A]" : "text-gray-400"} />
+              </button>
             ))}
           </div>
+        </Field>
+        <Field label={`Komentar (${comment.length}/500)`}>
+          <textarea rows={5} className="brutal-input" value={comment} onChange={(e) => setComment(e.target.value.slice(0, 500))} placeholder="Cerita pengalamanmu pakai patungandigital.id..." data-testid="testimoni-comment" />
+        </Field>
+        <div className="flex gap-2">
+          <button disabled={busy} type="submit" className="brutal-btn brutal-btn-red" data-testid="testimoni-submit">
+            <CheckCircle weight="bold" /> {editingId ? "Simpan perubahan" : "Kirim testimoni"}
+          </button>
+          {editingId && (
+            <button type="button" onClick={() => { setEditingId(null); setRating(5); setComment(""); }} className="brutal-btn brutal-btn-white" data-testid="testimoni-cancel">Batal</button>
+          )}
         </div>
-      )}
-      <button type="submit" className="brutal-btn brutal-btn-red mt-8" data-testid="prof-save">
-        <CheckCircle weight="bold" /> Simpan
-      </button>
-    </form>
+      </form>
+
+      <div className="space-y-4" data-testid="testimoni-list">
+        <h3 className="font-display font-bold text-2xl">Testimoni kamu</h3>
+        {items.length === 0 && <EmptyState msg="Belum ada testimoni." />}
+        {items.map((t) => (
+          <div key={t.id} className="brutal p-5" data-testid={`testimoni-${t.id}`}>
+            <div className="flex items-center justify-between">
+              <div className="flex gap-0.5" aria-label={`${t.rating} bintang`}>
+                {[1,2,3,4,5].map((n) => <Star key={n} weight={n <= t.rating ? "fill" : "regular"} size={16} className={n <= t.rating ? "text-[#FFD60A]" : "text-gray-400"} />)}
+              </div>
+              <StatusPillTestimoni status={t.status} />
+            </div>
+            <p className="mt-3 text-sm">{t.comment}</p>
+            <div className="mt-3 flex gap-2">
+              <button onClick={() => startEdit(t)} className="brutal-sm px-3 py-1 text-xs bg-[#007AFF] text-white" data-testid={`testimoni-edit-${t.id}`}>Edit</button>
+              <button onClick={() => del(t)} className="brutal-sm px-3 py-1 text-xs bg-[#FF3B30] text-white" data-testid={`testimoni-delete-${t.id}`}>Hapus</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
+}
+
+function StatusPillTestimoni({ status }) {
+  const map = {
+    pending: { text: "Menunggu review", bg: "bg-[#FFD60A]", fg: "text-black" },
+    approved: { text: "Tayang di homepage", bg: "bg-[#34C759]", fg: "text-white" },
+    rejected: { text: "Ditolak", bg: "bg-[#FF3B30]", fg: "text-white" },
+  };
+  const m = map[status] || map.pending;
+  return <span className={`brutal-sm px-2 py-1 text-xs font-mono uppercase ${m.bg} ${m.fg}`}>{m.text}</span>;
 }
 
 function PasswordPanel() {

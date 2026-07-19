@@ -78,7 +78,7 @@ export default function OverviewTab() {
         <Note title="Auto Scheduler (ACTIVE)" body="Background scheduler jalan setiap 1 jam, otomatis kirim reminder untuk tagihan H-N sesuai config. Trigger manual di tab Reminder." />
         <Note title="Activity Log" body="Semua aksi admin (create/delete/bulk/send reminder/scheduler run/export/referral) tercatat di tab Activity." />
         <Note title="Payment Gateway (Midtrans)" body="Snap invoice aktif — sandbox key terpasang. Webhook di /api/webhooks/midtrans; pasang di Midtrans Dashboard → Settings → Payment Notification URL." />
-        <Note title="Reminder Email + WhatsApp" body="Isi SENDGRID_API_KEY dan TWILIO_ACCOUNT_SID/AUTH_TOKEN untuk notifikasi. Tanpa key, mode MOCKED." />
+        <Note title="Reminder Email" body="Isi SENDGRID_API_KEY untuk kirim email otomatis. Tanpa key, mode MOCKED." />
       </div>
     </div>
   );

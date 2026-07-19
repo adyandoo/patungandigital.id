@@ -23,6 +23,7 @@ export default function AutoInvoiceTab() {
         day_of_month: Number(icfg.day_of_month),
         due_days: Number(icfg.due_days),
         enabled: !!icfg.enabled,
+        expiry_warning_days: Number(icfg.expiry_warning_days) || 7,
       });
       toast.success("Konfigurasi auto-invoice tersimpan.");
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
@@ -56,12 +57,15 @@ export default function AutoInvoiceTab() {
           <h2 className="font-display font-bold text-2xl">Auto-Invoice Generator</h2>
         </div>
         <Note title="Bagaimana cara kerjanya?" body="Setiap jam scheduler cek: kalau tanggal hari ini = tanggal generate, buat invoice PENDING untuk semua subscription berstatus 'active'. Idempoten — kalau invoice periode bulan itu sudah ada untuk sub yang sama, di-skip." />
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-3 gap-4">
           <F label="Tanggal generate tiap bulan (1–28)">
             <input type="number" min={1} max={28} className="brutal-input" value={icfg.day_of_month} onChange={(e) => setIcfg({ ...icfg, day_of_month: e.target.value })} data-testid="invoice-day-input" />
           </F>
           <F label="Jatuh tempo (hari setelah generate)">
             <input type="number" min={1} max={60} className="brutal-input" value={icfg.due_days} onChange={(e) => setIcfg({ ...icfg, due_days: e.target.value })} data-testid="invoice-due-input" />
+          </F>
+          <F label="Warning expiry (H-N sebelum expired)">
+            <input type="number" min={1} max={30} className="brutal-input" value={icfg.expiry_warning_days ?? 7} onChange={(e) => setIcfg({ ...icfg, expiry_warning_days: e.target.value })} data-testid="invoice-warning-input" />
           </F>
         </div>
         <label className="flex items-center gap-2 font-mono text-sm">

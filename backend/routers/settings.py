@@ -14,13 +14,15 @@ router = APIRouter()
 # ---------------- Payment config ---------------- #
 @router.get("/payment-config")
 async def get_payment_config_public():
-    """Public endpoint used by user dashboard to render QRIS + fee info."""
+    """Public endpoint used by user dashboard to render QRIS + fee info + expiry warning window."""
     cfg = await db.settings.find_one({"key": "payment_config"}) or {}
+    icfg = await db.settings.find_one({"key": "invoice_config"}) or {}
     return {
         "qris_image_base64": cfg.get("qris_image_base64"),
         "qris_notes": cfg.get("qris_notes", ""),
         "manual_bank_info": cfg.get("manual_bank_info", ""),
         "midtrans_fee_percent": float(cfg.get("midtrans_fee_percent", 5.0) or 5.0),
+        "expiry_warning_days": int(icfg.get("expiry_warning_days", 7) or 7),
     }
 
 
@@ -55,6 +57,7 @@ async def get_invoice_config(admin: dict = Depends(require_admin)):
         "day_of_month": int(cfg.get("day_of_month", 1) or 1),
         "due_days": int(cfg.get("due_days", 7) or 7),
         "enabled": bool(cfg.get("enabled", True)),
+        "expiry_warning_days": int(cfg.get("expiry_warning_days", 7) or 7),
         "last_run_period_label": cfg.get("last_run_period_label"),
         "last_run_at": cfg.get("last_run_at"),
     }

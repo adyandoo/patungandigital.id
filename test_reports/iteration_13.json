@@ -1,0 +1,39 @@
+{
+  "summary": "Iter13: All 15 backend pytest tests pass (WA cleanup, renew flow with duration override + not-own 404, testimonials CRUD + admin approve/reject/delete + rating/comment validation + cross-user 404, profile picture set/clear/413/unauth, expiry_warning_days config, invoice-generator duration_months present). Frontend UI smoke test passes: homepage testimonials-section renders with avg=5.0 badge + 2 cards, user dashboard shows header-avatar with initials gradient + Testimoni tab + rating stars + profile-picture-card + upload button, admin has Testimoni tab + Reminder tab with NO WhatsApp/Twilio references.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/subscriptions", "issue": "SubscriptionInput / SubscriptionUpdate schemas do not accept duration_months, so admin cannot persist it on a subscription. Invoice generator reads sub.duration_months but always falls back to 1. Feature promise 'auto-invoice carries duration_months from sub' cannot be exercised end-to-end via public admin APIs unless the field is written by some other side-effect."},
+      {"endpoint": "_run_due_reminders scheduler (server.py:692)", "issue": "Scheduler summary still appends 'whatsapp_sent' key (resolves to None via r.get). Dead reference — should be removed for cleanliness after WA removal."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "UserDashboard onboarding checklist ('Mulai dari sini')", "issues": ["Step 2 still says 'Lengkapi nomor WhatsApp' with 'Isi WhatsApp sekarang →' CTA — contradicts P1 'remove WhatsApp entirely'. Rename/remove step or replace with a non-WA milestone."]},
+      {"screen": "Admin > Reminder tab", "issues": ["ReminderTab.jsx save() still sends 'enable_whatsapp' in the PUT body (line 18). Backend model strips it via Pydantic, but the client reference is dead code post-WA removal."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter13.py", "/app/test_reports/pytest/iter13.xml"],
+  "action_items": [
+    "Add duration_months field to SubscriptionInput + SubscriptionUpdate so admins can actually persist multi-month duration on a subscription (needed for the advertised auto-invoice behavior).",
+    "Remove 'enable_whatsapp' from ReminderTab.jsx save payload (dead field after WA removal).",
+    "Remove 'whatsapp_sent' key from scheduler send-summary in server.py:692.",
+    "Update UserDashboard onboarding checklist step 2 to not reference WhatsApp (or drop the step)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1767 lines — refactor into routers/payments.py, routers/subscriptions.py, routers/auth.py continues to be the biggest structural gap.",
+    "routers/testimonials.py + settings.py still import from server.py (db, get_current_user, models). As more routers land, extract to backend/deps.py + backend/models.py to break coupling risk.",
+    "Profile picture size guard is length-based only; a maliciously-crafted 700KB base64 blob that is NOT an image will still be stored. Consider validating data URL MIME prefix strictly (b64.startswith('data:image/')) instead of the current OR-that-always-true guard on line 995 ('or len(b64) < 700_000' makes the condition unreachably permissive).",
+    "Renew endpoint doesn't reject subscriptions with status='cancelled'/'expired' — allowing renewal for any state is acceptable but worth an explicit business rule note."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter13.py"],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "100% (all testids present, flows work)"},
+  "test_credentials": "admin@patungandigital.id / Adm!nPd-JavpOaidEa6wZgFnBS",
+  "seed_data_creation": "Test users prefixed iter13<hex>; cleanup on module teardown via /api/admin/cleanup-test-users?prefix=<RUN_ID>. Also cleans up testimonials created during the run. One seed user (iter13ui_bf6d08@example.com, userpass123) + 1 approved testimonial were left in place for UI verification; can be cleaned via cleanup-test-users?prefix=iter13ui.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter13 covered by /app/backend/tests/test_iter13.py (15 tests, all green). Renew endpoint requires sub.user_id == current user; cross-user gives 404 (not 403). Testimonials require ≥1 subscription (not necessarily active). Public /api/testimonials returns {items,stats:{avg,count}} where avg is rounded to 2 decimals over ALL approved. Profile picture size guard is 700_000 bytes of base64 string (~500KB binary). expiry_warning_days lives in invoice_config settings doc, exposed via public /payment-config and admin /invoice-config. Duration override on renew is via {duration_months:N} body. NOTE: SubscriptionInput does not accept duration_months — admin cannot set it on a subscription via API, so the 'invoice carries sub.duration_months' path is only reachable if the field lands on the sub doc by some other flow.",
+  "rca of the issue": "N/A — 100% pass. Minor issues documented above are code-quality/consistency, not functional failures."
+}
