@@ -63,10 +63,19 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - **Analytics $lookup (P2)**: Single aggregation pipeline joins payments→subscriptions→services in one round-trip instead of N+1 Python loop.
 - Testing: 55/55 backend tests PASS (10 new). All frontend flows verified. No bugs.
 
+## Iteration 5 (2026-02-19) — Referral banner, Leaderboard, Tier Rewards
+- **Homepage referral banner**: Full-width `#FFD60A` section with "Ajak teman → Rp 10.000" headline, tier chips (5/10/25), CTA to Register, and inline top-5 monthly leaderboard sourced from `/api/leaderboard`.
+- **Tier reward system**: `TIER_THRESHOLDS = [1→5refs/1mo, 2→10refs/2mo, 3→25refs/5mo]`. `maybe_grant_tier_rewards()` invoked after every successful referral; grants missing tiers idempotently via `$addToSet` on `tiers_granted` and `$inc` on `free_months_credit`. Logs `referral_reward` rows (type=tier_N) + activity log entry.
+- **Free months consumption**: `admin_create_payment` prioritises `free_months_credit` (sets amount=0) before `referral_credit`; admin PaymentsTab renders "FREE MONTH" badge.
+- **Public leaderboard endpoint**: `GET /api/leaderboard` returns `{monthly, all_time, month_label}` via a 2-stage aggregation on `referral_rewards` (excludes tier rows via `referred_id != null`). Each row has rank/name/initials/count/total_earned/tiers_granted.
+- **Extended /me/referral-stats**: adds `free_months_credit`, `successful_count`, `tiers`, `tiers_granted`, `next_tier`. ReferralPanel now shows tier progress bar with % to next unlock + all-time & monthly leaderboard lists.
+- **Fixed** `gen_referral_code` to always yield exactly 8 chars (increased URL-safe entropy pool).
+- Testing: 63/64 backend tests PASS (9/9 iter5 new). Frontend flows verified.
+
 ## Backlog / next tasks
-- **P1**: Real SendGrid key + Twilio credentials → enable live email/WhatsApp notifications.
-- **P1**: Configure Midtrans webhook URL in Midtrans Dashboard (Settings → Payment → Notification URL → `https://group-stream-admin.preview.emergentagent.com/api/webhooks/midtrans`).
-- **P1**: Async SendGrid/Twilio SDK calls (currently sync via run_in_executor).
-- **P2**: Remove Xendit endpoints once Midtrans is fully verified in production.
-- **P2**: Move base64 receipts to object storage once volume grows.
-- **P2**: Homepage testimonial section, FAQ, and referral CTA banner ("ajak teman, dapat Rp 10.000").
+- **P0** (external): User setup — Midtrans Dashboard → Settings → Payment → Notification URL: `https://group-stream-admin.preview.emergentagent.com/api/webhooks/midtrans`.
+- **P1**: Real SendGrid + Twilio keys to enable live email/WhatsApp.
+- **P2**: Split `server.py` (1364 lines) into `routers/*.py` modules (referral, admin, midtrans, analytics).
+- **P2**: DB cleanup / filter test-prefixed users from public leaderboard before production launch.
+- **P2**: Remove deprecated Xendit endpoints once Midtrans is live-verified.
+- **P2**: Move base64 receipts to object storage.

@@ -157,7 +157,9 @@ async def maybe_grant_tier_rewards(user_id: str):
 
 
 def gen_referral_code() -> str:
-    return secrets.token_urlsafe(6).replace("-", "").replace("_", "").upper()[:8]
+    # Guarantee >= 8 chars after stripping URL-safe symbols
+    raw = secrets.token_urlsafe(16).replace("-", "").replace("_", "").upper()
+    return raw[:8]
 
 
 async def ensure_referral_code(user_id: str) -> str:
