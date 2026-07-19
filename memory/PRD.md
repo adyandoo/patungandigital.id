@@ -106,9 +106,28 @@ Website for legal premium subscription sharing (patungan) — YouTube, Netflix, 
 - **E2E verified**: 1 Netflix group + 2 users (host+regular) assigned → set shared credential → both users see identical email/password via /me/groups. `is_me` flag correctly identifies self.
 - Testing: **97/97 tests PASS** (10/10 iter8 new + full regression). One backend hardening applied by testing agent: `admin_list_subs` now ObjectId.is_valid guarded.
 
+## Iteration 9 (2026-02-19) — Dual Payment Methods + Partial PATCH + Admin Seed + Orphan Cleanup
+- **Dual payment methods (P0)**:
+  - New `settings.payment_config` doc holds `qris_image_base64`, `qris_notes`, `manual_bank_info`, `midtrans_fee_percent` (default 5).
+  - Public `GET /api/payment-config` (no auth) — used by user dashboard to render QRIS + fee copy.
+  - Admin `GET/PUT /api/admin/payment-config` — new **Payment Config** tab in AdminDashboard (`data-testid=admin-tab-payment-settings`) lets admin upload QRIS image (base64), set instructions, manual bank info, and fee %.
+  - `admin_create_payment` no longer auto-creates Midtrans snap. Payment starts with `payment_method=null`, `base_amount=original`.
+  - New `POST /api/me/payments/{id}/choose-method` — user picks `qris` (0% fee, amount=base) or `midtrans` (adds fee=round(base*pct/100), creates Snap invoice on the fly, returns redirect_url). Ownership + status guarded. Returns 502 friendly error if Midtrans API rejects.
+  - `upload_receipt` now **auto-approves** → sets `status='paid'` immediately (was 'review') and triggers referral rewards. Admin can still manually flip status back later.
+  - UserDashboard `PaymentsPanel` refactored: shows method chooser buttons (`choose-qris-{id}`, `choose-midtrans-{id}`), QRIS modal with image + notes, upload-receipt button appears only after QRIS chosen, "Ganti metode" reset flow.
+- **Partial subscription update (P1)**: New `SubscriptionUpdate` model (all Optional). `PATCH /admin/subscriptions/{id}` accepts any subset — e.g. just `{status:'paused'}` or `{group_id:'...'}`. Enables the auto-suggest group assignment flow to work without resending the full sub body.
+- **Admin seeding & management (P2)**:
+  - `.env` `ADMIN_PASSWORD` rotated to strong random `Adm!nPd-JavpOaidEa6wZgFnBS` (documented in `/app/memory/test_credentials.md`).
+  - Seed logic **no longer force-resets** existing admin password on restart — so admins can change password via UserDashboard → Password tab and it persists across restarts.
+  - New `POST /api/admin/create-admin` endpoint (admin-only) creates additional admin accounts. UI: yellow **Buat Admin** button in Users tab (`data-testid=admin-create-admin`) opens dedicated `AdminModal` with min-8-char password enforcement.
+- **Legacy cleanup (P2)**: startup migration deletes orphan `subscriptions.user_id='0'` documents.
+- Testing: **18/18 iter10 backend tests PASS** + frontend smoke confirmed (Payment Config tab, Buat Admin modal, QRIS/Midtrans buttons all interactive).
+- **Not implemented** (deferred by user): WhatsApp / Twilio integration.
+
 ## Backlog / next tasks
-- **P1**: Twilio credentials for live WhatsApp reminders.
-- **P2**: Harden other admin_list_* endpoints with ObjectId.is_valid guards for data integrity.
-- **P2**: Migrate legacy orphan subscription (user_id='0') via one-off cleanup.
-- **P2**: `PATCH /admin/subscriptions/{id}` accepts full body only — consider partial-update PATCH semantics.
-- **P2**: Move base64 receipts to object storage.
+- **P1 (deferred by user)**: Twilio credentials for live WhatsApp reminders.
+- **P2**: Extract payments/config endpoints into `routers/payments.py` + `routers/settings.py` — server.py now ~1413 lines.
+- **P2**: Move base64 receipts + QRIS image to object storage (currently embedded in Mongo).
+- **P2**: Add `Field(ge=0, le=100)` bound on `midtrans_fee_percent` and stricter integer-rounding rule (math.floor) to avoid banker's-rounding disputes.
+- **P3**: Free-month payment branch lacks targeted test — add coverage.
+
