@@ -69,7 +69,7 @@ mongo_url = "mongodb://127.0.0.1:27017"
 client = AsyncIOMotorClient(mongo_url)
 db = client["patungan_db"]
 
-JWT_SECRET = os.environ["JWT_SECRET"]
+JWT_SECRET = "patungandigitalnyaadysabzan"
 JWT_ALG = "HS256"
 
 logging.basicConfig(level=logging.INFO)
