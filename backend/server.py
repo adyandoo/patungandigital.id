@@ -65,7 +65,7 @@ MIDTRANS_SERVER_KEY = os.environ.get("MIDTRANS_SERVER_KEY", "")
 REFERRAL_REWARD = int(os.environ.get("REFERRAL_REWARD_IDR", "10000") or "10000")
 
 # ---------------- Mongo setup ---------------- #
-mongo_url = "mongodb://127.0.0.1:27017"
+mongo_url = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
 client = AsyncIOMotorClient(mongo_url)
 db = client["patungan_db"]
 
